@@ -2,6 +2,7 @@ package main
 
 import (
 	"myGodis/src/lib/logger"
+	"myGodis/src/redis/handler"
 	"myGodis/src/server"
 	"time"
 )
@@ -21,7 +22,7 @@ func main() {
 		Timeout:    2 * time.Second,
 	}
 
-	handler := server.MakeEchoHandler()
+	// handler := server.MakeEchoHandler()
 
-	server.ListenAndServe(cfg, handler)
+	server.ListenAndServe(cfg, handler.MakeHandler())
 }
