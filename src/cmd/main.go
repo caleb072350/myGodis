@@ -17,7 +17,7 @@ func main() {
 	logger.Setup(settings)
 
 	cfg := &server.Config{
-		Address:    ":16399",
+		Address:    ":16379",
 		MaxConnect: 16,
 		Timeout:    2 * time.Second,
 	}
