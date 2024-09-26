@@ -23,7 +23,15 @@ type DataEntity struct {
 	Code uint8
 	TTL  int64 // ttl in seconds, 0 for unlimited ttl
 	Data interface{}
+
+	// dict will ensure thread safety (by using mutex) of its method
+	// use this mutex for complicated commands only, eg. rpush, incr ...
 	sync.RWMutex
+}
+
+type DataEntityWithKey struct {
+	DataEntity
+	Key string
 }
 
 // args don't include cmd line
@@ -43,6 +51,18 @@ func MakeCmdMap() map[string]CmdFunc {
 	cmdMap["setnx"] = SetNX
 	cmdMap["setex"] = SetEX
 	cmdMap["psetex"] = PSetEX
+
+	cmdMap["lpush"] = LPush
+	cmdMap["lpushx"] = LPushX
+	cmdMap["rpush"] = RPush
+	cmdMap["lpop"] = LPop
+	cmdMap["rpop"] = RPop
+	cmdMap["rpoplpush"] = RPopLPush
+	cmdMap["lrem"] = LRem
+	cmdMap["llen"] = LLen
+	cmdMap["lindex"] = LIndex
+	cmdMap["lset"] = LSet
+	cmdMap["lrange"] = LRange
 
 	return cmdMap
 }
