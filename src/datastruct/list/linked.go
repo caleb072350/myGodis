@@ -2,6 +2,8 @@
 
 package list
 
+import "myGodis/src/datastruct/utils"
+
 type LinkedList struct {
 	first *node
 	last  *node
@@ -57,15 +59,27 @@ func (list *LinkedList) Get(index int) (val interface{}) {
 	return list.find(index).val
 }
 
-func (list *LinkedList) Insert(index int, val interface{}) {
+// 更新节点的值
+func (list *LinkedList) Set(index int, val interface{}) {
 	if list == nil {
 		panic("list is nil")
 	}
 	if index < 0 || index >= list.size {
 		panic("index out of bounds")
 	}
+	list.find(index).val = val
+}
+
+func (list *LinkedList) Insert(index int, val interface{}) {
+	if list == nil {
+		panic("list is nil")
+	}
+	if index < 0 || index > list.size {
+		panic("index out of bounds")
+	}
 	if index == list.size {
 		list.Add(val)
+		return
 	} else {
 		// 找到index位置的元素，把新元素插在index位置上，原来的元素往后移
 		pivot := list.find(index)
@@ -76,18 +90,11 @@ func (list *LinkedList) Insert(index int, val interface{}) {
 			pivot.prev.next = n
 		}
 		pivot.prev = n
+		list.size++
 	}
-	list.size++
 }
 
-func (list *LinkedList) Remove(index int) {
-	if list == nil {
-		panic("list is nil")
-	}
-	if index < 0 || index >= list.size {
-		panic("index out of bounds")
-	}
-	n := list.find(index)
+func (list *LinkedList) removeNode(n *node) {
 	if n.prev == nil {
 		list.first = n.next
 	} else {
@@ -102,12 +109,113 @@ func (list *LinkedList) Remove(index int) {
 	// for gc
 	n.prev = nil
 	n.next = nil
-	n.val = nil
+	// n.val = nil // 这里因为删除之后要返回节点的值，所以不能将val设为nil
 
 	list.size--
 }
 
-func (list *LinkedList) Size() int {
+func (list *LinkedList) Remove(index int) (val interface{}) {
+	if list == nil {
+		panic("list is nil")
+	}
+	if index < 0 || index >= list.size {
+		panic("index out of bounds")
+	}
+	n := list.find(index)
+	list.removeNode(n)
+
+	return n.val
+}
+
+func (list *LinkedList) RemoveLast() (val interface{}) {
+	if list == nil {
+		panic("list is nil")
+	}
+	if list.last == nil {
+		// empty list
+		return nil
+	}
+	n := list.last
+	list.removeNode(n)
+	return n.val
+}
+
+func (list *LinkedList) RemoveAllByVal(val interface{}) int {
+	if list == nil {
+		panic("list is nil")
+	}
+	count := 0
+	n := list.first
+	for n != nil {
+		var toRemoveNode *node
+		if utils.Equals(n.val, val) {
+			toRemoveNode = n
+		}
+		if n.next == nil {
+			if toRemoveNode != nil {
+				list.removeNode(toRemoveNode)
+				count++
+			}
+			break
+		} else {
+			n = n.next
+		}
+		if toRemoveNode != nil {
+			list.removeNode(toRemoveNode)
+			count++
+		}
+	}
+	return count
+}
+
+/**
+ * remove at most `count` values of the specified value in this list scan from left to right
+ */
+func (list *LinkedList) RemoveByVal(val interface{}, count int) int {
+	if list == nil {
+		panic("list is nil")
+	}
+	if count <= 0 {
+		return 0
+	}
+	n := list.first
+	c := 0
+	for i := 0; i < list.size; i++ {
+		if utils.Equals(n.val, val) {
+			list.removeNode(n)
+			c++
+			if c == count {
+				break
+			}
+		}
+		n = n.next
+	}
+	return c
+}
+
+func (list *LinkedList) ReverseRemoveByVal(val interface{}, count int) int {
+	if list == nil {
+		panic("list is nil")
+	}
+	if count <= 0 {
+		return 0
+	}
+	n := list.last
+	c := 0
+	for i := list.size - 1; i >= 0; i-- {
+		if utils.Equals(n.val, val) {
+			list.removeNode(n)
+			c++
+			if c == count {
+				break
+			}
+		}
+		n = n.prev
+	}
+	return c
+}
+
+func (list *LinkedList) Len() int {
 	if list == nil {
 		panic("list is nil")
 	}
@@ -127,10 +235,34 @@ func (list *LinkedList) ForEach(consumer func(int, interface{}) bool) {
 	}
 }
 
+func (list *LinkedList) Range(start int, stop int) []interface{} {
+	if list == nil {
+		panic("list is nil")
+	}
+	if start < 0 || start >= list.size || stop < start || stop > list.size {
+		panic("index out of bounds")
+	}
+	vals := make([]interface{}, stop-start)
+	n := list.find(start)
+	for i := start; i < stop; i++ {
+		vals[i-start] = n.val
+		n = n.next
+	}
+	return vals
+}
+
 func Make(vals ...interface{}) *LinkedList {
 	list := &LinkedList{}
 	for _, val := range vals {
 		list.Add(val)
 	}
 	return list
+}
+
+func MakeBytesList(vals ...[]byte) *LinkedList {
+	list := LinkedList{}
+	for _, v := range vals {
+		list.Add(v)
+	}
+	return &list
 }
