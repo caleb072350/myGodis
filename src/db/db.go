@@ -3,12 +3,14 @@ package db
 import (
 	"fmt"
 	"myGodis/src/datastruct/dict"
+	List "myGodis/src/datastruct/list"
 	"myGodis/src/datastruct/lock"
 	"myGodis/src/interface/redis"
 	"myGodis/src/lib/logger"
 	"myGodis/src/redis/reply"
 	"runtime/debug"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,7 +23,6 @@ const (
 
 type DataEntity struct {
 	Code uint8
-	TTL  int64 // ttl in seconds, 0 for unlimited ttl
 	Data interface{}
 }
 
@@ -34,10 +35,16 @@ type DataEntityWithKey struct {
 type CmdFunc func(db *DB, args [][]byte) redis.Reply
 
 type DB struct {
+	// key -> DataEntity
 	Data *dict.Dict
+	// key -> expireTime (time.Time)
+	TTLMap *dict.Dict
 	// dict will ensure thread safety (by using mutex) of its method
 	// use this mutex for complicated commands only, eg. rpush, incr ...
 	Locks *lock.LockMap
+
+	// TimerTask interval
+	interval time.Duration
 }
 
 var cmdMap = MakeCmdMap()
@@ -97,10 +104,14 @@ func (db *DB) Exec(args [][]byte) (result redis.Reply) {
 }
 
 func MakeDB() *DB {
-	return &DB{
-		Data:  dict.Make(1024),
-		Locks: &lock.LockMap{},
+	db := &DB{
+		Data:     dict.Make(1024),
+		TTLMap:   dict.Make(512),
+		Locks:    &lock.LockMap{},
+		interval: 5 * time.Second,
 	}
+	db.TimerTask()
+	return db
 }
 
 func (db *DB) Get(key string) (*DataEntity, bool) {
@@ -108,12 +119,40 @@ func (db *DB) Get(key string) (*DataEntity, bool) {
 	if !ok {
 		return nil, false
 	}
+	if db.IsExpired(key) {
+		return nil, false
+	}
 	entity, _ := raw.(*DataEntity)
 	return entity, true
 }
 
+// 为key设置过期时间
+func (db *DB) Expire(key string, expireTime time.Time) {
+	db.TTLMap.Put(key, expireTime)
+}
+
+// 持久化保存
+func (db *DB) Persist(key string) {
+	db.TTLMap.Remove(key)
+}
+
+// 判断key是否过期
+func (db *DB) IsExpired(key string) bool {
+	rawExpireTime, ok := db.TTLMap.Get(key)
+	if !ok {
+		return false
+	}
+	expireTime, _ := rawExpireTime.(time.Time)
+	expired := time.Now().After(expireTime)
+	if expired {
+		db.Remove(key)
+	}
+	return expired
+}
+
 func (db *DB) Remove(key string) {
 	db.Data.Remove(key)
+	db.TTLMap.Remove(key)
 	db.Locks.Clean(key)
 }
 
@@ -128,8 +167,38 @@ func (db *DB) Removes(keys ...string) (deleted int) {
 		_, exists := db.Data.Get(key)
 		if exists {
 			db.Data.Remove(key)
+			db.TTLMap.Remove(key)
 			deleted++
 		}
 	}
 	return deleted
+}
+
+func (db *DB) CleanExpired() {
+	now := time.Now()
+	toRemove := &List.LinkedList{}
+	db.TTLMap.ForEach(func(key string, val interface{}) bool {
+		expireTime, _ := val.(time.Time)
+		if now.After(expireTime) {
+			// expired
+			toRemove.Add(key)
+			db.Data.Remove(key)
+			db.Locks.Clean(key)
+		}
+		return true
+	})
+	toRemove.ForEach(func(i int, val interface{}) bool {
+		key, _ := val.(string)
+		db.TTLMap.Remove(key)
+		return true
+	})
+}
+
+func (db *DB) TimerTask() {
+	ticker := time.NewTicker(db.interval)
+	go func() {
+		for range ticker.C {
+			db.CleanExpired()
+		}
+	}()
 }

@@ -5,6 +5,7 @@ import (
 	"myGodis/src/redis/reply"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -102,7 +103,6 @@ func Set(db *DB, args [][]byte) redis.Reply {
 
 	entity := &DataEntity{
 		Code: StringCode,
-		TTL:  ttl,
 		Data: value,
 	}
 	switch policy {
@@ -112,6 +112,12 @@ func Set(db *DB, args [][]byte) redis.Reply {
 		db.Data.PutIfAbsent(key, entity)
 	case updatePolicy:
 		db.Data.PutIfExists(key, value)
+	}
+	if ttl != unlimitedTTL {
+		expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
+		db.Expire(key, expireTime)
+	} else {
+		db.TTLMap.Remove(key) // override ttl
 	}
 	return &reply.OkReply{}
 }
@@ -149,10 +155,12 @@ func SetEX(db *DB, args [][]byte) redis.Reply {
 	ttl := ttlArg * 1000
 	entity := &DataEntity{
 		Code: StringCode,
-		TTL:  ttl,
 		Data: value,
 	}
-	db.Data.PutIfExists(key, entity)
+	if db.Data.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
+		expireTime := time.Now().Add(time.Duration(ttlArg) * time.Second)
+		db.Expire(key, expireTime)
+	}
 	return &reply.OkReply{}
 }
 
@@ -164,19 +172,21 @@ func PSetEX(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	value := args[1]
 
-	ttlArg, err := strconv.ParseInt(string(args[1]), 10, 64)
+	ttl, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
 		return &reply.SyntaxErrReply{}
 	}
-	if ttlArg <= 0 {
+	if ttl <= 0 {
 		return reply.MakeErrReply("ERR invalid expire time in psetex")
 	}
 	entity := &DataEntity{
 		Code: StringCode,
-		TTL:  ttlArg,
 		Data: value,
 	}
-	db.Data.PutIfExists(key, entity)
+	if db.Data.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
+		expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
+		db.Expire(key, expireTime)
+	}
 	return &reply.OkReply{}
 }
 
@@ -250,6 +260,7 @@ func GetSet(db *DB, args [][]byte) redis.Reply {
 		Data: value,
 	}
 	db.Data.Put(key, entity)
+	db.TTLMap.Remove(key) // override ttl
 	return reply.MakeBulkReply(old)
 }
 

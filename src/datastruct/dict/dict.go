@@ -13,7 +13,11 @@ type Dict struct {
 	nextTable   []*Shard     // 在rehash过程中使用
 	nextTableMu sync.Mutex   // nextTable的互斥锁，用来实现对nextTable的单一进程访问
 	count       int32        // 这里是Dict中存储的元素的数量
-	rehashIndex int32        //在rehash过程中正在处理的[]*Shard的index，小于这个index的已经放到nextTable中，大于这个index的还未处理，等于这个index的正在处理中
+
+	// -1: no rehashing in progress
+	// >=0 && < tableSize: table[rehashIndex] is rehashing
+	// >= tableSize: rehashing progress is finishing
+	rehashIndex int32 //在rehash过程中正在处理的[]*Shard的index，小于这个index的已经放到nextTable中，大于这个index的还未处理，等于这个index的正在处理中
 
 }
 
@@ -176,7 +180,8 @@ func (d *Dict) Get(key string) (val interface{}, exists bool) {
 	index := d.spread(hashCode)
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
-		/* if rehashIndex > index, then the shard has finished resize, put in the next table
+		/*
+		 * if rehashIndex > index, then the shard has finished resize, put in the next table
 		 * if rehashIndex == index, then the shard is being resized or just finished.
 		 * Resizing will not be finished until the lock has been released.
 		 */
@@ -299,7 +304,6 @@ func (d *Dict) PutIfAbsent(key string, val interface{}) (result int) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
-
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
 		d.ensureNextTable()
@@ -487,5 +491,72 @@ func (d *Dict) transfer(wg *sync.WaitGroup) {
 		nextShard1.mutex.RUnlock()
 		nextShard0.mutex.RUnlock()
 		shard.mutex.RUnlock()
+	}
+}
+
+type Consumer func(key string, val interface{}) bool
+
+func (shard *Shard) ForEach(consumer Consumer) bool {
+	if shard == nil {
+		panic("shard is nil")
+	}
+	shard.mutex.RLock()
+	defer shard.mutex.RUnlock()
+
+	node := shard.head
+	for node != nil {
+		if !consumer(node.key, node.val) {
+			return false
+		}
+		node = node.next
+	}
+	return true
+}
+
+/*
+ * may not contain new entry inserted during traversal
+ */
+func (dict *Dict) ForEach(consumer Consumer) {
+	if dict == nil {
+		panic("dict is nil")
+	}
+	table, ok := dict.table.Load().([]*Shard)
+	if !ok {
+		panic("dict is nil")
+	}
+
+	var rehashIndex int32
+	tableSize := len(table)
+	for index, shard := range table {
+		rehashIndex = atomic.LoadInt32(&dict.rehashIndex)
+		if rehashIndex >= int32(index) {
+			// current slot has rehashed
+			if dict.nextTable == nil {
+				// rehash has finished, traver current table
+				// local variable `table` will not change to nextTable
+				if !shard.ForEach(consumer) {
+					break
+				}
+			}
+			i0 := index
+			nextShard0 := dict.nextTable[i0]
+			if nextShard0 != nil {
+				if !nextShard0.ForEach(consumer) {
+					break
+				}
+			}
+
+			i1 := index + tableSize
+			nextShard1 := dict.nextTable[i1]
+			if nextShard1 != nil {
+				if !nextShard1.ForEach(consumer) {
+					break
+				}
+			}
+		} else {
+			if !shard.ForEach(consumer) {
+				break
+			}
+		}
 	}
 }
