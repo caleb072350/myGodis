@@ -54,3 +54,65 @@ func (set *Set) ToSlice() []string {
 	})
 	return slice
 }
+
+func (set *Set) ForEach(consumer func(member string) bool) {
+	set.dict.ForEach(func(key string, val interface{}) bool {
+		return consumer(key)
+	})
+}
+
+// 交集运算
+func (set *Set) Intersect(another *Set) *Set {
+	if set == nil {
+		panic("set is nil")
+	}
+	setSize := set.Len()
+	anotherSize := another.Len()
+	if setSize > anotherSize {
+		set, another = another, set
+	}
+	newSet := Make(setSize)
+	set.ForEach(func(member string) bool {
+		if another.Has(member) {
+			newSet.Add(member)
+		}
+		return true
+	})
+	return newSet
+}
+
+// 并集运算
+func (set *Set) Union(another *Set) *Set {
+	if set == nil {
+		panic("set is nil")
+	}
+	newSet := Make(set.Len() + another.Len())
+	set.ForEach(func(member string) bool {
+		newSet.Add(member)
+		return true
+	})
+	another.ForEach(func(member string) bool {
+		newSet.Add(member)
+		return true
+	})
+	return newSet
+}
+
+// 差集运算
+func (set *Set) Diff(another *Set) *Set {
+	if set == nil {
+		panic("set is nil")
+	}
+	newSet := Make(set.Len())
+	set.ForEach(func(member string) bool {
+		if !another.Has(member) {
+			newSet.Add(member)
+		}
+		return true
+	})
+	return newSet
+}
+
+// func (set *Set) RandomMembers(limit int) []string {
+// 	return set.dict.RandomKeys(limit)
+// }

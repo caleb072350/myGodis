@@ -105,6 +105,9 @@ func Set(db *DB, args [][]byte) redis.Reply {
 		Code: StringCode,
 		Data: value,
 	}
+
+	db.Remove(key) // clean ttl
+
 	switch policy {
 	case upsertPolicy:
 		db.Data.Put(key, entity)
