@@ -16,11 +16,11 @@ type Client struct {
 	// is sending request in progress
 	sending atomic.AtomicBool
 	// must bulk msg lineCount - 1 (first line)
-	expectedLineCount uint32
+	expectedArgsCount uint32
 	// sent line count, exclude first line
-	sentLineCount uint32
+	receivedCount uint32
 	// sent lines, exclude first line
-	sentLines [][]byte
+	args [][]byte
 }
 
 func (c *Client) Close() error {

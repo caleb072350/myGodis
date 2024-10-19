@@ -8,7 +8,6 @@ import (
 	"myGodis/src/interface/db"
 	"myGodis/src/lib/logger"
 	"myGodis/src/lib/sync/atomic"
-	"myGodis/src/redis/parser"
 	"myGodis/src/redis/reply"
 	"net"
 	"strconv"
@@ -38,7 +37,7 @@ func MakeHandler() *Handler {
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 	if h.closing.Get() {
 		// closing handler refuse new connection
-		conn.Close()
+		_ = conn.Close()
 	}
 	client := &Client{
 		conn: conn,
@@ -53,9 +52,20 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		// may occurs: client EOF, client timeout, server early close
 		if fixedLen == 0 {
 			msg, err = reader.ReadBytes('\n')
+			if len(msg) == 0 || msg[len(msg)-2] != '\r' {
+				errReply := &reply.ProtocolErrReply{Msg: "invalid multibulk length"}
+				_, _ = client.conn.Write(errReply.ToBytes())
+			}
 		} else {
 			msg = make([]byte, fixedLen+2)
 			_, err = io.ReadFull(reader, msg)
+			if len(msg) == 0 ||
+				msg[len(msg)-2] != '\r' ||
+				msg[len(msg)-1] != '\n' {
+				errReply := &reply.ProtocolErrReply{Msg: "invalid multibulk length"}
+				_, _ = client.conn.Write(errReply.ToBytes())
+			}
+
 			fixedLen = 0
 		}
 
@@ -65,12 +75,9 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 			} else {
 				logger.Warn(err)
 			}
-			client.Close()
+			_ = client.Close()
 			h.activeConn.Delete(client)
 			return //io error, disconnect with client
-		}
-		if len(msg) == 0 {
-			continue // ignore empty request
 		}
 
 		if !client.sending.Get() {
@@ -79,15 +86,14 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 				// bulk multi msg
 				expectedLine, err := strconv.ParseUint(string(msg[1:len(msg)-2]), 10, 32)
 				if err != nil {
-					client.conn.Write(UnknownErrReplyBytes)
+					_, _ = client.conn.Write(UnknownErrReplyBytes)
 					continue
 				}
-				expectedLine *= 2
 				client.waitingReply.Add(1)
 				client.sending.Set(true)
-				client.expectedLineCount = uint32(expectedLine)
-				client.sentLineCount = 0
-				client.sentLines = make([][]byte, expectedLine)
+				client.expectedArgsCount = uint32(expectedLine)
+				client.receivedCount = 0
+				client.args = make([][]byte, expectedLine)
 			} else {
 				// TODO: text protocol
 			}
@@ -100,35 +106,31 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 					errReply := &reply.ProtocolErrReply{Msg: err.Error()}
 					_, _ = client.conn.Write(errReply.ToBytes())
 				}
-			}
-			client.sentLines[client.sentLineCount] = line
-			client.sentLineCount++
-			// if sending finished
-			if client.sentLineCount == client.expectedLineCount {
-				client.sending.Set(false) // finish sending progress
-				// exec cmd
-				if len(client.sentLines)%2 != 0 {
-					_, _ = client.conn.Write(UnknownErrReplyBytes)
-					client.expectedLineCount = 0
-					client.sentLineCount = 0
-					client.sentLines = nil
-					client.waitingReply.Done()
-					continue
+				if fixedLen <= 0 {
+					errReply := &reply.ProtocolErrReply{Msg: "invalid multibulk length"}
+					_, _ = client.conn.Write(errReply.ToBytes())
 				}
+			} else {
+				client.args[client.receivedCount] = line
+				client.receivedCount++
+			}
+
+			// if sending finished
+			if client.receivedCount == client.expectedArgsCount {
+				client.sending.Set(false) // finish sending progress
 
 				// send reply
-				args := parser.Parse(client.sentLines)
-				result := h.db.Exec(args)
+				result := h.db.Exec(client.args)
 				if result != nil {
-					conn.Write(result.ToBytes())
+					_, _ = conn.Write(result.ToBytes())
 				} else {
-					conn.Write(UnknownErrReplyBytes)
+					_, _ = conn.Write(UnknownErrReplyBytes)
 				}
 
 				// finish reply
-				client.expectedLineCount = 0
-				client.sentLineCount = 0
-				client.sentLines = nil
+				client.expectedArgsCount = 0
+				client.receivedCount = 0
+				client.args = nil
 				client.waitingReply.Done()
 			}
 		}
