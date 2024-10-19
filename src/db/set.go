@@ -240,7 +240,7 @@ func SInterStore(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: set,
 	}
-	db.Data.Put(dest, entity)
+	db.Put(dest, entity)
 
 	return reply.MakeIntReply(int64(set.Len()))
 }
@@ -328,7 +328,7 @@ func SUnionStore(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: set,
 	}
-	db.Data.Put(dest, entity)
+	db.Put(dest, entity)
 	return reply.MakeIntReply(int64(set.Len()))
 }
 
@@ -436,7 +436,7 @@ func SDiffStore(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: set,
 	}
-	db.Data.Put(dest, entity)
+	db.Put(dest, entity)
 
 	return reply.MakeIntReply(int64(set.Len()))
 }

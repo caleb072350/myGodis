@@ -119,7 +119,7 @@ func GoID() int {
 	return id
 }
 
-func debug(testing.T) {
+func debug(t testing.T) {
 	lm := Locks{}
 	size := 10
 	var wg sync.WaitGroup

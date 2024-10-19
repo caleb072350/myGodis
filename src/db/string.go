@@ -115,11 +115,11 @@ func Set(db *DB, args [][]byte) redis.Reply {
 
 	switch policy {
 	case upsertPolicy:
-		db.Data.Put(key, entity)
+		db.Put(key, entity)
 	case insertPolicy:
-		db.Data.PutIfAbsent(key, entity)
+		db.PutIfAbsent(key, entity)
 	case updatePolicy:
-		db.Data.PutIfExists(key, value)
+		db.PutIfExists(key, entity)
 	}
 	if ttl != unlimitedTTL {
 		expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
@@ -140,7 +140,7 @@ func SetNX(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: value,
 	}
-	result := db.Data.PutIfAbsent(key, entity)
+	result := db.PutIfAbsent(key, entity)
 	return reply.MakeIntReply(int64(result))
 }
 
@@ -163,7 +163,7 @@ func SetEX(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: value,
 	}
-	if db.Data.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
+	if db.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
 		expireTime := time.Now().Add(time.Duration(ttlArg) * time.Second)
 		db.Expire(key, expireTime)
 	}
@@ -188,7 +188,7 @@ func PSetEX(db *DB, args [][]byte) redis.Reply {
 	entity := &DataEntity{
 		Data: value,
 	}
-	if db.Data.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
+	if db.PutIfExists(key, entity) > 0 && ttl != unlimitedTTL {
 		expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
 		db.Expire(key, expireTime)
 	}
@@ -212,7 +212,7 @@ func MSet(db *DB, args [][]byte) redis.Reply {
 
 	for i, key := range keys {
 		value := values[i]
-		db.Data.Put(key, &DataEntity{Data: value})
+		db.Put(key, &DataEntity{Data: value})
 	}
 	return &reply.OkReply{}
 }
@@ -253,7 +253,7 @@ func GetSet(db *DB, args [][]byte) redis.Reply {
 	if err != nil {
 		return err
 	}
-	db.Data.Put(key, &DataEntity{Data: value})
+	db.Put(key, &DataEntity{Data: value})
 	db.Persist(key)
 	return reply.MakeBulkReply(old)
 }
@@ -276,10 +276,10 @@ func Incr(db *DB, args [][]byte) redis.Reply {
 		if err != nil {
 			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
-		db.Data.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+1, 10))})
+		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+1, 10))})
 		return reply.MakeIntReply(val + 1)
 	} else {
-		db.Data.Put(key, &DataEntity{Data: []byte("1")})
+		db.Put(key, &DataEntity{Data: []byte("1")})
 		return reply.MakeIntReply(1)
 	}
 }
@@ -307,10 +307,10 @@ func IncrBy(db *DB, args [][]byte) redis.Reply {
 		if err != nil {
 			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
-		db.Data.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+delta, 10))})
+		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+delta, 10))})
 		return reply.MakeIntReply(val + delta)
 	} else {
-		db.Data.Put(key, &DataEntity{Data: args[1]})
+		db.Put(key, &DataEntity{Data: args[1]})
 		return reply.MakeIntReply(delta)
 	}
 }
@@ -339,10 +339,10 @@ func IncrByFloat(db *DB, args [][]byte) redis.Reply {
 			return reply.MakeErrReply("ERR value is not a valid float")
 		}
 		resultBytes := []byte(val.Add(delta).String())
-		db.Data.Put(key, &DataEntity{Data: resultBytes})
+		db.Put(key, &DataEntity{Data: resultBytes})
 		return reply.MakeBulkReply(resultBytes)
 	} else {
-		db.Data.Put(key, &DataEntity{Data: args[1]})
+		db.Put(key, &DataEntity{Data: args[1]})
 		return reply.MakeBulkReply(args[1])
 	}
 }
@@ -365,10 +365,10 @@ func Decr(db *DB, args [][]byte) redis.Reply {
 		if err != nil {
 			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
-		db.Data.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-1, 10))})
+		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-1, 10))})
 		return reply.MakeIntReply(val - 1)
 	} else {
-		db.Data.Put(key, &DataEntity{Data: []byte("-1")})
+		db.Put(key, &DataEntity{Data: []byte("-1")})
 		return reply.MakeIntReply(-1)
 	}
 }
@@ -396,10 +396,10 @@ func DecrBy(db *DB, args [][]byte) redis.Reply {
 		if err != nil {
 			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
-		db.Data.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-delta, 10))})
+		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-delta, 10))})
 		return reply.MakeIntReply(val - delta)
 	} else {
-		db.Data.Put(key, &DataEntity{Data: args[1]})
+		db.Put(key, &DataEntity{Data: args[1]})
 		return reply.MakeIntReply(-delta)
 	}
 }
