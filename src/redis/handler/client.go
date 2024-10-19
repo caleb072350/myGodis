@@ -25,7 +25,7 @@ type Client struct {
 
 func (c *Client) Close() error {
 	c.waitingReply.WaitWithTimeout(10 * time.Second)
-	c.conn.Close()
+	_ = c.conn.Close()
 	return nil
 }
 

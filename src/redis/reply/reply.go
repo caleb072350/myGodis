@@ -7,6 +7,7 @@ var (
 	CRLF               = "\r\n"
 )
 
+/* ---- Bulk Reply ---- */
 type BulkReply struct {
 	Arg []byte
 }
@@ -22,6 +23,7 @@ func (r *BulkReply) ToBytes() []byte {
 	return []byte("$" + strconv.Itoa(len(r.Arg)) + CRLF + string(r.Arg) + CRLF)
 }
 
+/* ---- Multi Bulk Reply ---- */
 type MultiBulkReply struct {
 	Args [][]byte
 }
@@ -45,6 +47,7 @@ func (r *MultiBulkReply) ToBytes() []byte {
 	return []byte(res)
 }
 
+/* ---- Status Reply ----- */
 type StatusReply struct {
 	Status string
 }
@@ -57,6 +60,7 @@ func (r *StatusReply) ToBytes() []byte {
 	return []byte("+" + r.Status + CRLF)
 }
 
+/* ---- Int Reply ----- */
 type IntReply struct {
 	Code int64
 }
