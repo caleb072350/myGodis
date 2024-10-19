@@ -6,6 +6,34 @@ import (
 	"myGodis/src/redis/reply"
 )
 
+func (db *DB) getAsSet(key string) (*HashSet.Set, reply.ErrorReply) {
+	entity, exists := db.Get(key)
+	if !exists {
+		return nil, nil
+	}
+	set, ok := entity.Data.(*HashSet.Set)
+	if !ok {
+		return nil, &reply.WrongTypeErrReply{}
+	}
+	return set, nil
+}
+
+func (db *DB) GetOrInitSet(key string) (set *HashSet.Set, inited bool, errReply reply.ErrorReply) {
+	set, errReply = db.getAsSet(key)
+	if errReply != nil {
+		return nil, false, errReply
+	}
+	inited = false
+	if set == nil {
+		set = HashSet.Make(0)
+		db.Put(key, &DataEntity{
+			Data: set,
+		})
+		inited = true
+	}
+	return set, inited, nil
+}
+
 func SAdd(db *DB, args [][]byte) redis.Reply {
 	if len(args) < 2 {
 		return reply.MakeErrReply("ERR wrong number of arguments for 'sadd' command")
@@ -14,25 +42,15 @@ func SAdd(db *DB, args [][]byte) redis.Reply {
 	members := args[1:]
 
 	// lock
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Lock(key)
+	defer db.UnLock(key)
 
 	// get or init entity
-	entity, exists := db.Get(key)
-	if !exists {
-		entity = &DataEntity{
-			Code: SetCode,
-			Data: HashSet.Make(0),
-		}
-		db.Data.Put(key, entity)
+	set, _, errReply := db.GetOrInitSet(key)
+	if errReply != nil {
+		return errReply
 	}
 
-	// check type
-	if entity.Code != SetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	set, _ := entity.Data.(*HashSet.Set)
 	counter := 0
 	for _, member := range members {
 		counter += set.Add(string(member))
@@ -47,17 +65,14 @@ func SIsMember(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	member := string(args[1])
 
-	entity, exists := db.Get(key)
-	if !exists {
+	set, errReply := db.getAsSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if set == nil {
 		return reply.MakeIntReply(0)
 	}
 
-	// check type
-	if entity.Code != SetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	set, _ := entity.Data.(*HashSet.Set)
 	has := set.Has(member)
 	if has {
 		return reply.MakeIntReply(1)
@@ -74,24 +89,23 @@ func SRem(db *DB, args [][]byte) redis.Reply {
 	members := args[1:]
 
 	// lock
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Lock(key)
+	defer db.UnLock(key)
 
-	entity, exists := db.Get(key)
-	if !exists {
+	set, errReply := db.getAsSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if set == nil {
 		return reply.MakeIntReply(0)
 	}
-
-	// check type
-	if entity.Code != SetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	set, _ := entity.Data.(*HashSet.Set)
 
 	counter := 0
 	for _, member := range members {
 		counter += set.Remove(string(member))
+	}
+	if set.Len() == 0 {
+		db.Remove(key)
 	}
 	return reply.MakeIntReply(int64(counter))
 }
@@ -102,17 +116,13 @@ func SCard(db *DB, args [][]byte) redis.Reply {
 	}
 	key := string(args[0])
 
-	entity, exists := db.Get(key)
-	if !exists {
+	set, errReply := db.getAsSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if set == nil {
 		return reply.MakeIntReply(0)
 	}
-
-	// check type
-	if entity.Code != SetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	set, _ := entity.Data.(*HashSet.Set)
 	return reply.MakeIntReply(int64(set.Len()))
 }
 
@@ -123,20 +133,16 @@ func SMembers(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 
 	// lock
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
-	entity, exists := db.Get(key)
-	if !exists {
+	set, errReply := db.getAsSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if set == nil {
 		return &reply.EmptyMultiBulkReply{}
 	}
-
-	// check type
-	if entity.Code != SetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	set, _ := entity.Data.(*HashSet.Set)
 	arr := make([][]byte, set.Len())
 	i := 0
 	set.ForEach(func(member string) bool {
@@ -159,19 +165,18 @@ func SInter(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
 
 	var result *HashSet.Set
 	for _, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			return &reply.EmptyMultiBulkReply{}
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -204,22 +209,21 @@ func SInterStore(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
-	db.Locks.Lock(dest)
-	defer db.Locks.Unlock(dest)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
+	db.Locker.Lock(dest)
+	defer db.Locker.UnLock(dest)
 
 	var result *HashSet.Set
 	for _, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			db.Remove(dest) // clean ttl and old value
-			return reply.MakeIntReply(0)
+			return &reply.EmptyMultiBulkReply{}
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -234,7 +238,6 @@ func SInterStore(db *DB, args [][]byte) redis.Reply {
 
 	set := HashSet.MakeFromVals(result.ToSlice()...)
 	entity := &DataEntity{
-		Code: SetCode,
 		Data: set,
 	}
 	db.Data.Put(dest, entity)
@@ -252,19 +255,18 @@ func SUnion(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
 
 	var result *HashSet.Set
 	for _, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			continue
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -296,21 +298,20 @@ func SUnionStore(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
-	db.Locks.Lock(dest)
-	defer db.Locks.Unlock(dest)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
+	db.Locker.Lock(dest)
+	defer db.Locker.UnLock(dest)
 
 	var result *HashSet.Set
 	for _, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			continue
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -325,7 +326,6 @@ func SUnionStore(db *DB, args [][]byte) redis.Reply {
 
 	set := HashSet.MakeFromVals(result.ToSlice()...)
 	entity := &DataEntity{
-		Code: SetCode,
 		Data: set,
 	}
 	db.Data.Put(dest, entity)
@@ -344,23 +344,21 @@ func SDiff(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
 
 	var result *HashSet.Set
 	for i, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			if i == 0 {
-				// early termination
 				return &reply.EmptyMultiBulkReply{}
 			}
 			continue
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -398,26 +396,25 @@ func SDiffStore(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.RLocks(keys...)
-	defer db.Locks.RUnlocks(keys...)
-	db.Locks.Lock(dest)
-	defer db.Locks.Unlock(dest)
+	db.Locker.RLocks(keys...)
+	defer db.Locker.RUnlocks(keys...)
+	db.Locker.Lock(dest)
+	defer db.Locker.UnLock(dest)
 
 	var result *HashSet.Set
 	for i, key := range keys {
-		entity, exists := db.Get(key)
-		if !exists {
+		set, errReply := db.getAsSet(key)
+		if errReply != nil {
+			return errReply
+		}
+		if set == nil {
 			if i == 0 {
-				// early termination
 				db.Remove(dest)
 				return &reply.EmptyMultiBulkReply{}
+			} else {
+				continue
 			}
-			continue
 		}
-		if entity.Code != SetCode {
-			return &reply.WrongTypeErrReply{}
-		}
-		set, _ := entity.Data.(*HashSet.Set)
 		if result == nil {
 			result = HashSet.MakeFromVals(set.ToSlice()...)
 		} else {
@@ -437,7 +434,6 @@ func SDiffStore(db *DB, args [][]byte) redis.Reply {
 	}
 	set := HashSet.MakeFromVals(result.ToSlice()...)
 	entity := &DataEntity{
-		Code: SetCode,
 		Data: set,
 	}
 	db.Data.Put(dest, entity)

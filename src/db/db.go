@@ -13,16 +13,7 @@ import (
 	"time"
 )
 
-const (
-	StringCode = iota // Data is []byte
-	ListCode          // *list.LinkedList
-	SetCode
-	DictCode // *dict.Dict
-	SortedSetCode
-)
-
 type DataEntity struct {
-	Code uint8
 	Data interface{}
 }
 
@@ -41,71 +32,23 @@ type DB struct {
 	TTLMap *dict.Dict
 	// dict will ensure thread safety (by using mutex) of its method
 	// use this mutex for complicated commands only, eg. rpush, incr ...
-	Locks *lock.LockMap
+	Locker *lock.LockMap
 
 	// TimerTask interval
 	interval time.Duration
 }
 
-var cmdMap = MakeCmdMap()
+var router = MakeRouter()
 
-func MakeCmdMap() map[string]CmdFunc {
-	cmdMap := make(map[string]CmdFunc)
-	cmdMap["ping"] = Ping
-	cmdMap["get"] = Get
-	cmdMap["set"] = Set
-	cmdMap["setnx"] = SetNX
-	cmdMap["setex"] = SetEX
-	cmdMap["psetex"] = PSetEX
-	cmdMap["mget"] = MGet
-	cmdMap["mset"] = MSet
-
-	cmdMap["getset"] = GetSet
-	cmdMap["incr"] = Incr
-	cmdMap["incrby"] = IncrBy
-	cmdMap["incrbyfloat"] = IncrByFloat
-	cmdMap["decr"] = Decr
-	cmdMap["decrby"] = DecrBy
-
-	cmdMap["lpush"] = LPush
-	cmdMap["lpushx"] = LPushX
-	cmdMap["rpush"] = RPush
-	cmdMap["lpop"] = LPop
-	cmdMap["rpop"] = RPop
-	cmdMap["rpoplpush"] = RPopLPush
-	cmdMap["lrem"] = LRem
-	cmdMap["llen"] = LLen
-	cmdMap["lindex"] = LIndex
-	cmdMap["lset"] = LSet
-	cmdMap["lrange"] = LRange
-
-	cmdMap["hset"] = HSet
-	cmdMap["hsetnx"] = HSetNX
-	cmdMap["hget"] = HGet
-	cmdMap["hexists"] = HExists
-	cmdMap["hdel"] = HDel
-	cmdMap["hlen"] = HLen
-	cmdMap["hmget"] = HMGet
-	cmdMap["hmset"] = HMSet
-	cmdMap["hkeys"] = HKeys
-	cmdMap["hvals"] = HVals
-	cmdMap["hgetall"] = HGetAll
-	cmdMap["hincrby"] = HIncrBy
-	cmdMap["hincrbyfloat"] = HIncrByFloat
-
-	cmdMap["sadd"] = SAdd
-	cmdMap["sismember"] = SIsMember
-	cmdMap["srem"] = SRem
-	cmdMap["scard"] = SCard
-	cmdMap["smembers"] = SMembers
-	cmdMap["sinter"] = SInter
-	cmdMap["sinterstore"] = SInterStore
-	cmdMap["sunion"] = SUnion
-	cmdMap["sunionstore"] = SUnionStore
-	cmdMap["sdiff"] = SDiff
-	cmdMap["sdiffstore"] = SDiffStore
-
-	return cmdMap
+func MakeDB() *DB {
+	db := &DB{
+		Data:     dict.Make(1024),
+		TTLMap:   dict.Make(512),
+		Locker:   &lock.LockMap{},
+		interval: 5 * time.Second,
+	}
+	db.TimerTask()
+	return db
 }
 
 func (db *DB) Exec(args [][]byte) (result redis.Reply) {
@@ -117,7 +60,7 @@ func (db *DB) Exec(args [][]byte) (result redis.Reply) {
 	}()
 
 	cmd := strings.ToLower(string(args[0]))
-	cmdFunc, ok := cmdMap[cmd]
+	cmdFunc, ok := router[cmd]
 	if !ok {
 		return reply.MakeErrReply("ERR unknown command '" + cmd + "'")
 	}
@@ -127,17 +70,6 @@ func (db *DB) Exec(args [][]byte) (result redis.Reply) {
 		result = cmdFunc(db, [][]byte{})
 	}
 	return
-}
-
-func MakeDB() *DB {
-	db := &DB{
-		Data:     dict.Make(1024),
-		TTLMap:   dict.Make(512),
-		Locks:    &lock.LockMap{},
-		interval: 5 * time.Second,
-	}
-	db.TimerTask()
-	return db
 }
 
 func (db *DB) Get(key string) (*DataEntity, bool) {
@@ -152,6 +84,41 @@ func (db *DB) Get(key string) (*DataEntity, bool) {
 	return entity, true
 }
 
+/* ---- Lock Function ---------------*/
+
+func (db *DB) Lock(key string) {
+	db.Locker.Lock(key)
+}
+
+func (db *DB) RLock(key string) {
+	db.Locker.RLock(key)
+}
+
+func (db *DB) UnLock(key string) {
+	db.Locker.UnLock(key)
+}
+
+func (db *DB) RUnlock(key string) {
+	db.Locker.RUnlock(key)
+}
+
+func (db *DB) Locks(keys ...string) {
+	db.Locker.Locks(keys...)
+}
+
+func (db *DB) RLocks(keys ...string) {
+	db.Locker.RLocks(keys...)
+}
+
+func (db *DB) UnLocks(keys ...string) {
+	db.Locker.Unlocks(keys...)
+}
+
+func (db *DB) RUnlocks(keys ...string) {
+	db.Locker.RUnlocks(keys...)
+}
+
+/* ----- TTL Funtions -------*/
 // 为key设置过期时间
 func (db *DB) Expire(key string, expireTime time.Time) {
 	db.TTLMap.Put(key, expireTime)
@@ -176,18 +143,17 @@ func (db *DB) IsExpired(key string) bool {
 	return expired
 }
 
+func (db *DB) Put(key string, entity *DataEntity) {
+	db.Data.Put(key, entity)
+}
+
 func (db *DB) Remove(key string) {
 	db.Data.Remove(key)
 	db.TTLMap.Remove(key)
-	db.Locks.Clean(key)
+	db.Locker.Clean(key)
 }
 
 func (db *DB) Removes(keys ...string) (deleted int) {
-	db.Locks.Locks(keys...)
-	defer func() {
-		db.Locks.Unlocks(keys...)
-		db.Locks.Cleans(keys...)
-	}()
 	deleted = 0
 	for _, key := range keys {
 		_, exists := db.Data.Get(key)
@@ -209,7 +175,7 @@ func (db *DB) CleanExpired() {
 			// expired
 			toRemove.Add(key)
 			db.Data.Remove(key)
-			db.Locks.Clean(key)
+			db.Locker.Clean(key)
 		}
 		return true
 	})

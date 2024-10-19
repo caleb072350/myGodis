@@ -7,6 +7,34 @@ import (
 	"strconv"
 )
 
+func (db *DB) getAsSortedSet(key string) (*SortedSet.SortedSet, reply.ErrorReply) {
+	entity, exists := db.Get(key)
+	if !exists {
+		return nil, nil
+	}
+	sortedSet, ok := entity.Data.(*SortedSet.SortedSet)
+	if !ok {
+		return nil, &reply.WrongTypeErrReply{}
+	}
+	return sortedSet, nil
+}
+
+func (db *DB) getOrInitSortedSet(key string) (sortedSet *SortedSet.SortedSet, inited bool, errReply reply.ErrorReply) {
+	sortedSet, errReply = db.getAsSortedSet(key)
+	if errReply != nil {
+		return nil, false, errReply
+	}
+	inited = false
+	if sortedSet == nil {
+		sortedSet = SortedSet.Make()
+		db.Data.Put(key, &DataEntity{
+			Data: sortedSet,
+		})
+		inited = true
+	}
+	return sortedSet, inited, nil
+}
+
 func ZAdd(db *DB, args [][]byte) redis.Reply {
 	if len(args) < 3 || len(args)%2 != 1 {
 		return reply.MakeErrReply("ERR wrong number of arguments for 'zadd' command")
@@ -29,26 +57,14 @@ func ZAdd(db *DB, args [][]byte) redis.Reply {
 	}
 
 	// lock
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get or init entity
-	entity, exists := db.Get(key)
-	if !exists {
-		entity = &DataEntity{
-			Code: SortedSetCode,
-			Data: SortedSet.Make(),
-		}
-		db.Data.Put(key, entity)
+	sortedSet, _, errReply := db.getOrInitSortedSet(key)
+	if errReply != nil {
+		return errReply
 	}
-
-	// check type
-	if entity.Code != SortedSetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	// insert
-	sortedSet, _ := entity.Data.(*SortedSet.SortedSet)
 	i := 0
 	for _, e := range elements {
 		if sortedSet.Add(e.Member, e.Score) {
@@ -68,16 +84,13 @@ func ZScore(db *DB, args [][]byte) redis.Reply {
 	member := string(args[1])
 
 	// get entity
-	entity, exists := db.Get(key)
-	if !exists {
+	sortedSet, errReply := db.getAsSortedSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if sortedSet == nil {
 		return &reply.NullBulkReply{}
 	}
-	//check type
-	if entity.Code != SortedSetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	sortedSet, _ := entity.Data.(*SortedSet.SortedSet)
 	element, exists := sortedSet.Get(member)
 	if !exists {
 		return &reply.NullBulkReply{}
@@ -96,16 +109,14 @@ func ZRank(db *DB, args [][]byte) redis.Reply {
 	member := string(args[1])
 
 	// get entity
-	entity, exists := db.Get(key)
-	if !exists {
+	sortedSet, errReply := db.getAsSortedSet(key)
+	if errReply != nil {
+		return errReply
+	}
+	if sortedSet == nil {
 		return &reply.NullBulkReply{}
 	}
-	//check type
-	if entity.Code != SortedSetCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	sortedSet, _ := entity.Data.(*SortedSet.SortedSet)
+	// get rank
 	rank := sortedSet.GetRank(member, false)
 	if rank < 0 {
 		return &reply.NullBulkReply{}

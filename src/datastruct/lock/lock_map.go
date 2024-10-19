@@ -32,7 +32,7 @@ func (lock *LockMap) RLock(key string) {
 	mu.RLock()
 }
 
-func (lock *LockMap) Unlock(key string) {
+func (lock *LockMap) UnLock(key string) {
 	value, ok := lock.m.Load(key)
 	if !ok {
 		return
@@ -75,7 +75,7 @@ func (lock *LockMap) Unlocks(keys ...string) {
 	sort.Sort(keySlice)
 	for i := size - 1; i >= 0; i-- {
 		key := keySlice[i]
-		lock.Unlock(key)
+		lock.UnLock(key)
 	}
 }
 

@@ -57,18 +57,6 @@ func (r *StatusReply) ToBytes() []byte {
 	return []byte("+" + r.Status + CRLF)
 }
 
-type ErrReply struct {
-	Status string
-}
-
-func MakeErrReply(status string) *ErrReply {
-	return &ErrReply{Status: status}
-}
-
-func (r *ErrReply) ToBytes() []byte {
-	return []byte("-" + r.Status + CRLF)
-}
-
 type IntReply struct {
 	Code int64
 }
@@ -79,4 +67,28 @@ func MakeIntReply(code int64) *IntReply {
 
 func (r *IntReply) ToBytes() []byte {
 	return []byte(":" + strconv.FormatInt(r.Code, 10) + CRLF)
+}
+
+/* ---- Error Reply ----- */
+type ErrorReply interface {
+	Error() string
+	ToBytes() []byte
+}
+
+type StandardErrReply struct {
+	Status string
+}
+
+func MakeErrReply(status string) *StandardErrReply {
+	return &StandardErrReply{
+		Status: status,
+	}
+}
+
+func (r *StandardErrReply) ToBytes() []byte {
+	return []byte("-" + r.Status + CRLF)
+}
+
+func (r *StandardErrReply) Error() string {
+	return r.Status
 }

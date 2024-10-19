@@ -7,6 +7,34 @@ import (
 	"strconv"
 )
 
+func (db *DB) getAsList(key string) (*List.LinkedList, reply.ErrorReply) {
+	entity, exists := db.Get(key)
+	if !exists {
+		return nil, nil
+	}
+	bytes, ok := entity.Data.(*List.LinkedList)
+	if !ok {
+		return nil, &reply.WrongTypeErrReply{}
+	}
+	return bytes, nil
+}
+
+func (db *DB) getOrInitList(key string) (list *List.LinkedList, inited bool, errReply reply.ErrorReply) {
+	list, errReply = db.getAsList(key)
+	if errReply != nil {
+		return nil, false, errReply
+	}
+	inited = false
+	if list == nil {
+		list = &List.LinkedList{}
+		db.Data.Put(key, &DataEntity{
+			Data: list,
+		})
+		inited = true
+	}
+	return list, inited, nil
+}
+
 func LIndex(db *DB, args [][]byte) redis.Reply {
 	// parse args
 	if len(args) != 2 {
@@ -19,17 +47,14 @@ func LIndex(db *DB, args [][]byte) redis.Reply {
 	}
 	index := int(index64)
 
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return &reply.NullBulkReply{}
 	}
 
-	//check type
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	size := list.Len()
 	if index < -1*size || index >= size {
 		return &reply.NullBulkReply{}
@@ -49,17 +74,13 @@ func LLen(db *DB, args [][]byte) redis.Reply {
 	}
 	key := string(args[0])
 
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return reply.MakeIntReply(0)
 	}
-
-	//check type
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	size := int64(list.Len())
 	return reply.MakeIntReply(size)
 }
@@ -73,21 +94,17 @@ func LPop(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get data
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return &reply.NullBulkReply{}
 	}
-
-	// check type
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	val, _ := list.Remove(0).([]byte)
 	if list.Len() == 0 {
 		db.Data.Remove(key)
@@ -103,29 +120,18 @@ func LPush(db *DB, args [][]byte) redis.Reply {
 	values := args[1:]
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get or init entity
-	entity, exists := db.Get(key)
-	if !exists {
-		entity = &DataEntity{
-			Code: ListCode,
-			Data: &List.LinkedList{},
-		}
+	list, _, errReply := db.getOrInitList(key)
+	if errReply != nil {
+		return errReply
 	}
 
-	if entity.Code != ListCode {
-		return reply.MakeErrReply("ERR type error")
-	}
-
-	// insert
-	list, _ := entity.Data.(*List.LinkedList)
 	for _, value := range values {
 		list.Insert(0, value)
 	}
-
-	db.Data.Put(key, entity)
 
 	return reply.MakeIntReply(int64(list.Len()))
 }
@@ -139,24 +145,19 @@ func LPushX(db *DB, args [][]byte) redis.Reply {
 	values := args[1:]
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return reply.MakeIntReply(0)
 	}
-
-	if entity.Code != ListCode {
-		return reply.MakeErrReply("ERR type error")
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	for _, value := range values {
 		list.Insert(0, value)
 	}
-
-	db.Data.Put(key, entity)
 
 	return reply.MakeIntReply(int64(list.Len()))
 }
@@ -178,20 +179,19 @@ func LRange(db *DB, args [][]byte) redis.Reply {
 	}
 	stop := int(stop64)
 
-	db.Locks.RLock(key)
-	defer db.Locks.RUnlock(key)
+	db.RLock(key)
+	defer db.RUnlock(key)
 
 	// get data
-	entity, exists := db.Get(key)
-	if !exists {
-		return &reply.EmptyMultiBulkReply{}
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
 	}
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
+	if list == nil {
+		return &reply.EmptyMultiBulkReply{}
 	}
 
 	// compute index
-	list, _ := entity.Data.(*List.LinkedList)
 	size := list.Len() // assert: size > 0
 	if start < -1*size {
 		start = 0
@@ -237,19 +237,17 @@ func LRem(db *DB, args [][]byte) redis.Reply {
 	value := args[2]
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Lock(key)
+	defer db.UnLock(key)
 
 	// get data entity
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return reply.MakeIntReply(0)
 	}
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	var removed int
 	if count == 0 {
 		removed = list.RemoveAllByVal(value)
@@ -280,19 +278,17 @@ func LSet(db *DB, args [][]byte) redis.Reply {
 	value := args[2]
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get entity
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return reply.MakeErrReply("ERR no such key")
 	}
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	size := list.Len()
 	if index < -1*size {
 		return reply.MakeErrReply("ERR index out of range")
@@ -314,19 +310,17 @@ func RPop(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 
 	// lock key
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get entity
-	entity, exists := db.Get(key)
-	if !exists {
+	list, errReply := db.getAsList(key)
+	if errReply != nil {
+		return errReply
+	}
+	if list == nil {
 		return &reply.NullBulkReply{}
 	}
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
-	}
-
-	list, _ := entity.Data.(*List.LinkedList)
 	val, _ := list.RemoveLast().([]byte)
 	if list.Len() == 0 {
 		db.Data.Remove(key)
@@ -342,26 +336,23 @@ func RPopLPush(db *DB, args [][]byte) redis.Reply {
 	destKey := string(args[1])
 
 	// locks keys
-	db.Locks.Locks(sourceKey, destKey)
-	defer db.Locks.Unlocks(sourceKey, destKey)
+	db.Locker.Locks(sourceKey, destKey)
+	defer db.Locker.Unlocks(sourceKey, destKey)
 
 	// get source entity
-	sourceEntity, exists := db.Get(sourceKey)
-	if !exists {
-		return &reply.NullBulkReply{}
+	sourceList, errReply := db.getAsList(sourceKey)
+	if errReply != nil {
+		return errReply
 	}
-	sourceList, _ := sourceEntity.Data.(*List.LinkedList)
+	if sourceList == nil {
+		return reply.MakeErrReply("ERR no such key")
+	}
 
 	// get dest entity
-	destEntity, exists := db.Get(destKey)
-	if !exists {
-		destEntity = &DataEntity{
-			Code: ListCode,
-			Data: &List.LinkedList{},
-		}
-		db.Data.Put(destKey, destEntity)
+	destList, _, errReply := db.getOrInitList(destKey)
+	if errReply != nil {
+		return errReply
 	}
-	destList, _ := destEntity.Data.(*List.LinkedList)
 
 	// pop and push
 	val, _ := sourceList.RemoveLast().([]byte)
@@ -380,26 +371,19 @@ func RPush(db *DB, args [][]byte) redis.Reply {
 	key := string(args[0])
 	values := args[1:]
 
-	db.Locks.Lock(key)
-	defer db.Locks.Unlock(key)
+	db.Locker.Lock(key)
+	defer db.Locker.UnLock(key)
 
 	// get or init entity
-	entity, exists := db.Get(key)
-	if !exists {
-		entity = &DataEntity{
-			Code: ListCode,
-			Data: &List.LinkedList{},
-		}
-	}
-	if entity.Code != ListCode {
-		return &reply.WrongTypeErrReply{}
+	list, _, errReply := db.getOrInitList(key)
+	if errReply != nil {
+		return errReply
 	}
 
 	// put list
-	list, _ := entity.Data.(*List.LinkedList)
 	for _, value := range values {
 		list.Add(value)
 	}
-	db.Data.Put(key, entity)
+
 	return reply.MakeIntReply(int64(list.Len()))
 }

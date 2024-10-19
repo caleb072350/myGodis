@@ -35,3 +35,7 @@ var wrongTypeErrBytes = []byte("-WRONGTYPE Operation against a key holding the w
 func (r *WrongTypeErrReply) ToBytes() []byte {
 	return wrongTypeErrBytes
 }
+
+func (r *WrongTypeErrReply) Error() string {
+	return "WRONGTYPE Operation against a key holding the wrong kind of value"
+}
