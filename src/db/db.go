@@ -30,12 +30,20 @@ type DB struct {
 	Data *dict.Dict
 	// key -> expireTime (time.Time)
 	TTLMap *dict.Dict
+	// channel -> list<*client>
+	SubMap *dict.Dict
+
 	// dict will ensure thread safety (by using mutex) of its method
 	// use this mutex for complicated commands only, eg. rpush, incr ...
 	Locker *lock.Locks
 
 	// TimerTask interval
 	interval time.Duration
+
+	// channel -> list(*Client)
+	subs *dict.Dict
+	// lock channel
+	subsLocker *lock.Locks
 }
 
 var router = MakeRouter()
@@ -46,12 +54,15 @@ func MakeDB() *DB {
 		TTLMap:   dict.Make(512),
 		Locker:   lock.Make(128),
 		interval: 5 * time.Second,
+
+		subs:       dict.Make(16),
+		subsLocker: lock.Make(16),
 	}
 	db.TimerTask()
 	return db
 }
 
-func (db *DB) Exec(args [][]byte) (result redis.Reply) {
+func (db *DB) Exec(c redis.Client, args [][]byte) (result redis.Reply) {
 	defer func() {
 		if err := recover(); err != nil {
 			logger.Warn(fmt.Sprintf("error occurs: %v\n%s", err, string(debug.Stack())))
@@ -60,6 +71,15 @@ func (db *DB) Exec(args [][]byte) (result redis.Reply) {
 	}()
 
 	cmd := strings.ToLower(string(args[0]))
+	if cmd == "subscribe" {
+		if len(args) < 2 {
+			return reply.MakeErrReply("ERR wrong number of arguments for 'subscribe' command")
+		}
+		return Subscribe(db, c, args[1:])
+	} else if cmd == "unsubscribe" {
+		return UnSubscribe(db, c, args[1:])
+	}
+
 	cmdFunc, ok := router[cmd]
 	if !ok {
 		return reply.MakeErrReply("ERR unknown command '" + cmd + "'")
@@ -111,7 +131,7 @@ func (db *DB) RLocks(keys ...string) {
 }
 
 func (db *DB) UnLocks(keys ...string) {
-	db.Locker.Unlocks(keys...)
+	db.Locker.UnLocks(keys...)
 }
 
 func (db *DB) RUnlocks(keys ...string) {
@@ -191,4 +211,9 @@ func (db *DB) TimerTask() {
 			db.CleanExpired()
 		}
 	}()
+}
+
+/* ----- Subscribe Functions ----- */
+func (db *DB) AfterClientClose(c redis.Client) {
+	unsubscribeAll(db, c)
 }

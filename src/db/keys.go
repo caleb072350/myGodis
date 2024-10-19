@@ -22,7 +22,7 @@ func Del(db *DB, args [][]byte) redis.Reply {
 
 	db.Locker.Locks(keys...)
 	defer func() {
-		db.Locker.Unlocks(keys...)
+		db.Locker.UnLocks(keys...)
 	}()
 
 	deleted := db.Removes(keys...)

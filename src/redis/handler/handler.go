@@ -11,6 +11,7 @@ import (
 	"myGodis/src/redis/reply"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -39,9 +40,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		// closing handler refuse new connection
 		_ = conn.Close()
 	}
-	client := &Client{
-		conn: conn,
-	}
+	client := MakeClient(conn)
 	h.activeConn.Store(client, 1)
 
 	reader := bufio.NewReader(conn)
@@ -76,11 +75,12 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 				logger.Warn(err)
 			}
 			_ = client.Close()
+			h.db.AfterClientClose(client)
 			h.activeConn.Delete(client)
 			return //io error, disconnect with client
 		}
 
-		if !client.sending.Get() {
+		if !client.uploading.Get() {
 			// new request
 			if msg[0] == '*' {
 				// bulk multi msg
@@ -90,12 +90,28 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 					continue
 				}
 				client.waitingReply.Add(1)
-				client.sending.Set(true)
+				client.uploading.Set(true)
 				client.expectedArgsCount = uint32(expectedLine)
 				client.receivedCount = 0
 				client.args = make([][]byte, expectedLine)
 			} else {
 				// TODO: text protocol
+				// remove \r or \n or \r\n in the end of line
+				str := strings.TrimSuffix(string(msg), "\n")
+				str = strings.TrimSuffix(str, "\r")
+				strs := strings.Split(str, " ")
+				args := make([][]byte, len(strs))
+				for i, s := range strs {
+					args[i] = []byte(s)
+				}
+
+				// send reply
+				result := h.db.Exec(client, args)
+				if result != nil {
+					_ = client.Write(result.ToBytes())
+				} else {
+					_ = client.Write(UnknownErrReplyBytes)
+				}
 			}
 		} else {
 			// receive following part of a request
@@ -117,14 +133,14 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 
 			// if sending finished
 			if client.receivedCount == client.expectedArgsCount {
-				client.sending.Set(false) // finish sending progress
+				client.uploading.Set(false) // finish sending progress
 
 				// send reply
-				result := h.db.Exec(client.args)
+				result := h.db.Exec(client, client.args)
 				if result != nil {
-					_, _ = conn.Write(result.ToBytes())
+					_ = client.Write(result.ToBytes())
 				} else {
-					_, _ = conn.Write(UnknownErrReplyBytes)
+					_ = client.Write(UnknownErrReplyBytes)
 				}
 
 				// finish reply

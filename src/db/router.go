@@ -8,5 +8,7 @@ func MakeRouter() map[string]CmdFunc {
 	routerMap["expire"] = Expire
 	routerMap["expireat"] = ExpireAt
 
+	routerMap["publish"] = Publish
+
 	return routerMap
 }

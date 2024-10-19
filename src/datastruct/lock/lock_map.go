@@ -86,7 +86,7 @@ func (locks *Locks) RLocks(keys ...string) {
 	}
 }
 
-func (locks *Locks) Unlocks(keys ...string) {
+func (locks *Locks) UnLocks(keys ...string) {
 	size := len(keys)
 	keySlice := make(sort.StringSlice, size)
 	copy(keySlice, keys)
@@ -130,7 +130,7 @@ func debug(testing.T) {
 			println("go: " + strconv.Itoa(GoID()))
 			time.Sleep(time.Second)
 			println("go: " + strconv.Itoa(GoID()))
-			lm.Unlocks("1", "2")
+			lm.UnLocks("1", "2")
 			wg.Done()
 		}(i)
 	}

@@ -337,7 +337,7 @@ func RPopLPush(db *DB, args [][]byte) redis.Reply {
 
 	// locks keys
 	db.Locker.Locks(sourceKey, destKey)
-	defer db.Locker.Unlocks(sourceKey, destKey)
+	defer db.Locker.UnLocks(sourceKey, destKey)
 
 	// get source entity
 	sourceList, errReply := db.getAsList(sourceKey)
