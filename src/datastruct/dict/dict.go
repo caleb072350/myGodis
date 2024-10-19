@@ -41,7 +41,7 @@ const (
 	loadFactor       = 0.75
 )
 
-// return the mini power of two which is not less than cap
+// return the mini 2^n which is not less than cap
 // 这个是什么鬼算法，没看懂
 func computeCapacity(param int) (size int) {
 	if param <= minCapacity {
@@ -53,10 +53,10 @@ func computeCapacity(param int) (size int) {
 	n |= n >> 4
 	n |= n >> 8
 	n |= n >> 16
-	if n < 0 {
+	if n < 0 || n >= maxCapacity {
 		return maxCapacity
 	}
-	return n + 1
+	return int(n + 1)
 }
 
 // 这个我理解就是go语言中的构造函数了，貌似经常看到
@@ -116,6 +116,15 @@ func (d *Dict) getNextShard(hashCode uint32) *Shard {
 	if d.nextTable == nil {
 		panic("next table is nil")
 	}
+
+	// in case next table has been released during get shard
+	d.nextTableMu.Lock()
+	defer d.nextTableMu.Unlock()
+
+	// rehashing may be in progress or rehashing has finished while waiting nextTableMu
+	if d.nextTable == nil {
+		return nil
+	}
 	nextTableSize := uint32(len(d.nextTable))
 	index := (nextTableSize - 1) & uint32(hashCode)
 	return d.nextTable[index]
@@ -157,8 +166,6 @@ func (shard *Shard) Get(key string) (val interface{}, exist bool) {
 	if shard == nil {
 		panic("shard is nil")
 	}
-	shard.mutex.RLock()
-	defer shard.mutex.RUnlock()
 
 	node := shard.head
 	for node != nil {
@@ -178,6 +185,9 @@ func (d *Dict) Get(key string) (val interface{}, exists bool) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
+	shard := d.getShard(index)
+	shard.mutex.RLock()
+
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
 		/*
@@ -185,12 +195,21 @@ func (d *Dict) Get(key string) (val interface{}, exists bool) {
 		 * if rehashIndex == index, then the shard is being resized or just finished.
 		 * Resizing will not be finished until the lock has been released.
 		 */
-		d.ensureNextTable() // 确保nextTable生成了
-		shard := d.getNextShard(hashCode)
-		val, exists = shard.Get(key)
+		shard.mutex.RUnlock()
+		nextShard := d.getNextShard(hashCode)
+		if nextShard == nil {
+			shard := d.getShard(d.spread(hashCode))
+			shard.mutex.RLock()
+			val, exists = shard.Get(key)
+			shard.mutex.RUnlock()
+		} else {
+			nextShard.mutex.RLock()
+			val, exists = nextShard.Get(key)
+			nextShard.mutex.RUnlock()
+		}
 	} else {
-		shard := d.getShard(index)
 		val, exists = shard.Get(key)
+		shard.mutex.RUnlock()
 	}
 	return
 }
@@ -207,8 +226,6 @@ func (shard *Shard) Put(key string, val interface{}, hashCode uint32) int {
 	if shard == nil {
 		panic("shard is nil")
 	}
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
 
 	node := shard.head
 	if node == nil {
@@ -248,14 +265,26 @@ func (d *Dict) Put(key string, val interface{}) (result int) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
+	shard := d.getShard(index)
+	shard.mutex.Lock()
+
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
-		d.ensureNextTable()
-		shard := d.getNextShard(hashCode)
-		result = shard.Put(key, val, hashCode)
+		shard.mutex.Unlock()
+		nextShard := d.getNextShard(hashCode)
+		if nextShard == nil {
+			shard := d.getNextShard(hashCode)
+			shard.mutex.Lock()
+			result = shard.Put(key, val, hashCode)
+			shard.mutex.Unlock()
+		} else {
+			nextShard.mutex.Lock()
+			result = nextShard.Put(key, val, hashCode)
+			nextShard.mutex.Unlock()
+		}
 	} else {
-		shard := d.getShard(index)
 		result = shard.Put(key, val, hashCode)
+		shard.mutex.Unlock()
 	}
 	if result == 1 {
 		d.addCount()
@@ -264,9 +293,6 @@ func (d *Dict) Put(key string, val interface{}) (result int) {
 }
 
 func (shard *Shard) PutIfAbsent(key string, val interface{}, hashCode uint32) int {
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
-
 	node := shard.head
 	if node == nil {
 		// empty shard
@@ -304,27 +330,36 @@ func (d *Dict) PutIfAbsent(key string, val interface{}) (result int) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
+	shard := d.getShard(index)
+	shard.mutex.Lock()
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
-		d.ensureNextTable()
-		shard := d.getNextShard(hashCode)
-		result = shard.PutIfAbsent(key, val, hashCode)
+		shard.mutex.Unlock()
+		nextShard := d.getNextShard(hashCode)
+		if nextShard == nil {
+			shard := d.getShard(d.spread(hashCode))
+			shard.mutex.Lock()
+			result = shard.PutIfAbsent(key, val, hashCode)
+			shard.mutex.Unlock()
+		} else {
+			nextShard.mutex.Lock()
+			result = nextShard.PutIfAbsent(key, val, hashCode)
+			nextShard.mutex.Unlock()
+		}
 	} else {
-		shard := d.getShard(index)
 		result = shard.PutIfAbsent(key, val, hashCode)
+		shard.mutex.Unlock()
 	}
 	if result == 1 {
 		d.addCount()
 	}
-	return
+	return result
 }
 
 func (shard *Shard) PutIfExists(key string, val interface{}) int {
 	if shard == nil {
 		panic("shard is nil")
 	}
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
 
 	node := shard.head
 	for node != nil {
@@ -344,15 +379,25 @@ func (d *Dict) PutIfExists(key string, val interface{}) (result int) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
-
+	shard := d.getShard(index)
+	shard.mutex.Lock()
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
-		d.ensureNextTable()
-		shard := d.getNextShard(hashCode)
-		result = shard.PutIfExists(key, val)
+		shard.mutex.Unlock()
+		nextShard := d.getNextShard(hashCode)
+		if nextShard == nil {
+			shard := d.getShard(d.spread(hashCode))
+			shard.mutex.Lock()
+			result = shard.PutIfExists(key, val)
+			shard.mutex.Unlock()
+		} else {
+			nextShard.mutex.Lock()
+			result = nextShard.PutIfExists(key, val)
+			nextShard.mutex.Unlock()
+		}
 	} else {
-		shard := d.getShard(index)
 		result = shard.PutIfExists(key, val)
+		shard.mutex.Unlock()
 	}
 	return
 }
@@ -362,8 +407,6 @@ func (shard *Shard) Remove(key string) int {
 	if shard == nil {
 		panic("shard is nil")
 	}
-	shard.mutex.Lock()
-	defer shard.mutex.Unlock()
 
 	node := shard.head
 	if node == nil {
@@ -392,14 +435,26 @@ func (d *Dict) Remove(key string) (result int) {
 	}
 	hashCode := fnv32(key)
 	index := d.spread(hashCode)
+	shard := d.getShard(index)
+	shard.mutex.Lock()
+
 	rehashIndex := atomic.LoadInt32(&d.rehashIndex)
 	if rehashIndex >= int32(index) {
-		d.ensureNextTable()
-		shard := d.getNextShard(index)
-		result = shard.Remove(key)
+		shard.mutex.Unlock()
+		nextShard := d.getNextShard(hashCode)
+		if nextShard == nil {
+			shard := d.getShard(d.spread(hashCode))
+			shard.mutex.Lock()
+			result = shard.Remove(key)
+			shard.mutex.Unlock()
+		} else {
+			nextShard.mutex.Lock()
+			result = nextShard.Remove(key)
+			nextShard.mutex.Unlock()
+		}
 	} else {
-		shard := d.getShard(index)
 		result = shard.Remove(key)
+		shard.mutex.Unlock()
 	}
 	if result > 0 {
 		atomic.AddInt32(&d.count, -1)
@@ -431,9 +486,11 @@ func (d *Dict) rehash() {
 	wg.Wait()
 
 	// finish rehash
+	d.nextTableMu.Lock()
 	d.table.Store(d.nextTable)
 	d.nextTable = nil
 	atomic.StoreInt32(&d.rehashIndex, -1)
+	d.nextTableMu.Unlock()
 }
 
 func (d *Dict) transfer(wg *sync.WaitGroup) {

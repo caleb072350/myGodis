@@ -43,7 +43,7 @@ func MakeClient(conn net.Conn) *Client {
 }
 
 func (c *Client) Write(b []byte) error {
-	if b == nil || len(b) == 0 {
+	if len(b) == 0 {
 		return nil
 	}
 	c.mu.Lock()
