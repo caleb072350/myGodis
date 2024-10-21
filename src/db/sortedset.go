@@ -35,9 +35,9 @@ func (db *DB) getOrInitSortedSet(key string) (sortedSet *SortedSet.SortedSet, in
 	return sortedSet, inited, nil
 }
 
-func ZAdd(db *DB, args [][]byte) redis.Reply {
+func ZAdd(db *DB, args [][]byte) (redis.Reply, *extra) {
 	if len(args) < 3 || len(args)%2 != 1 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'zadd' command")
+		return reply.MakeErrReply("ERR wrong number of arguments for 'zadd' command"), nil
 	}
 
 	key := string(args[0])
@@ -48,7 +48,7 @@ func ZAdd(db *DB, args [][]byte) redis.Reply {
 		member := string(args[2*i+2])
 		score, err := strconv.ParseFloat(string(scoreValue), 64)
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not a valid float")
+			return reply.MakeErrReply("ERR value is not a valid float"), nil
 		}
 		elements[i] = &SortedSet.Element{
 			Member: member,
@@ -63,7 +63,7 @@ func ZAdd(db *DB, args [][]byte) redis.Reply {
 	// get or init entity
 	sortedSet, _, errReply := db.getOrInitSortedSet(key)
 	if errReply != nil {
-		return errReply
+		return errReply, nil
 	}
 	i := 0
 	for _, e := range elements {
@@ -71,13 +71,13 @@ func ZAdd(db *DB, args [][]byte) redis.Reply {
 			i++
 		}
 	}
-	return reply.MakeIntReply(int64(i))
+	return reply.MakeIntReply(int64(i)), &extra{toPersist: true}
 }
 
-func ZScore(db *DB, args [][]byte) redis.Reply {
+func ZScore(db *DB, args [][]byte) (redis.Reply, *extra) {
 	// parse args
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'zscore' command")
+		return reply.MakeErrReply("ERR wrong number of arguments for 'zscore' command"), nil
 	}
 
 	key := string(args[0])
@@ -86,23 +86,23 @@ func ZScore(db *DB, args [][]byte) redis.Reply {
 	// get entity
 	sortedSet, errReply := db.getAsSortedSet(key)
 	if errReply != nil {
-		return errReply
+		return errReply, nil
 	}
 	if sortedSet == nil {
-		return &reply.NullBulkReply{}
+		return &reply.NullBulkReply{}, nil
 	}
 	element, exists := sortedSet.Get(member)
 	if !exists {
-		return &reply.NullBulkReply{}
+		return &reply.NullBulkReply{}, nil
 	}
 	value := strconv.FormatFloat(element.Score, 'f', -1, 64)
-	return reply.MakeBulkReply([]byte(value))
+	return reply.MakeBulkReply([]byte(value)), &extra{toPersist: true}
 }
 
-func ZRank(db *DB, args [][]byte) redis.Reply {
+func ZRank(db *DB, args [][]byte) (redis.Reply, *extra) {
 	// parse args
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'zrank' command")
+		return reply.MakeErrReply("ERR wrong number of arguments for 'zrank' command"), nil
 	}
 
 	key := string(args[0])
@@ -111,15 +111,15 @@ func ZRank(db *DB, args [][]byte) redis.Reply {
 	// get entity
 	sortedSet, errReply := db.getAsSortedSet(key)
 	if errReply != nil {
-		return errReply
+		return errReply, nil
 	}
 	if sortedSet == nil {
-		return &reply.NullBulkReply{}
+		return &reply.NullBulkReply{}, nil
 	}
 	// get rank
 	rank := sortedSet.GetRank(member, false)
 	if rank < 0 {
-		return &reply.NullBulkReply{}
+		return &reply.NullBulkReply{}, nil
 	}
-	return reply.MakeIntReply(rank)
+	return reply.MakeIntReply(rank), nil
 }
