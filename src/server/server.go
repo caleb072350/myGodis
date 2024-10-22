@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -35,28 +36,41 @@ func ListenAndServe(cfg *Config, handler tcp.Handler) {
 		case syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
 			logger.Info("shuting down...")
 			closing.Set(true)
-			listener.Close() // listener.Accept will return err immediately
+			_ = listener.Close() // listener.Accept will return err immediately
+			_ = handler.Close()  // close connections
 		}
 	}()
 
 	// listen port
 	logger.Info(fmt.Sprintf("bind: %s, start listening...", cfg.Address))
 	// closing listener than closing handler while shuting down
-	defer handler.Close()
-	defer listener.Close()
+	defer func() {
+		// close during unexpected error
+		_ = listener.Close()
+		_ = handler.Close()
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	var waitDone sync.WaitGroup
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if closing.Get() {
-				break
+				logger.Info("waitting disconnect...")
+				waitDone.Wait()
+				return // handler will be closed by defer
 			}
 			logger.Error(fmt.Sprintf("accept err: %v", err))
 			continue
 		}
 		logger.Info(fmt.Sprintf("accept link from %s", conn.RemoteAddr().String()))
-		go handler.Handle(ctx, conn)
+		go func() {
+			defer func() {
+				waitDone.Done()
+			}()
+			waitDone.Add(1)
+			handler.Handle(ctx, conn)
+		}()
 	}
 }
