@@ -7,8 +7,6 @@ func MakeRouter() map[string]CmdFunc {
 	routerMap["expire"] = Expire
 	routerMap["expireat"] = ExpireAt
 
-	routerMap["publish"] = Publish
-
 	routerMap["flushdb"] = FlushDB
 	routerMap["flushall"] = FlushAll
 

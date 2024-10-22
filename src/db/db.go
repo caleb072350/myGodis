@@ -8,6 +8,7 @@ import (
 	"myGodis/src/datastruct/lock"
 	"myGodis/src/interface/redis"
 	"myGodis/src/lib/logger"
+	"myGodis/src/pubsub"
 	"myGodis/src/redis/reply"
 	"os"
 	"runtime/debug"
@@ -45,12 +46,9 @@ type DB struct {
 	// TimerTask interval
 	interval time.Duration
 
-	// channel -> list(*Client)
-	subs dict.Dict
-	// lock channel
-	subsLocker *lock.Locks
-
 	stopWorld sync.WaitGroup
+
+	hub *pubsub.Hub
 
 	// main goroutine send commands to aof goroutine through aofChan
 	aofChan     chan *reply.MultiBulkReply
@@ -70,10 +68,10 @@ func MakeDB() *DB {
 		Locker:   lock.Make(lockerSize),
 		interval: 5 * time.Second,
 
-		subs:       dict.MakeConcurrent(16),
-		subsLocker: lock.Make(16),
+		hub: pubsub.MakeHub(),
 	}
 
+	// aof
 	if config.Properties.AppendOnly {
 		db.aofFilename = config.Properties.AppendFilename
 		db.loadAof()
@@ -90,6 +88,7 @@ func MakeDB() *DB {
 		}()
 	}
 
+	// start timer
 	db.TimerTask()
 	return db
 }
@@ -118,9 +117,11 @@ func (db *DB) Exec(c redis.Client, args [][]byte) (result redis.Reply) {
 		if len(args) < 2 {
 			return reply.MakeErrReply("ERR wrong number of arguments for 'subscribe' command")
 		}
-		return Subscribe(db, c, args[1:])
+		return pubsub.Subscribe(db.hub, c, args[1:])
+	} else if cmd == "publish" {
+		return pubsub.Publish(db.hub, args[1:])
 	} else if cmd == "unsubscribe" {
-		return UnSubscribe(db, c, args[1:])
+		return pubsub.UnSubscribe(db.hub, c, args[1:])
 	} else if cmd == "bgrewriteaof" {
 		reply := BGRewriteAOF(db, args[1:])
 		return reply
@@ -292,5 +293,5 @@ func (db *DB) TimerTask() {
 
 /* ----- Subscribe Functions ----- */
 func (db *DB) AfterClientClose(c redis.Client) {
-	unsubscribeAll(db, c)
+	pubsub.UnsubscribeAll(db.hub, c)
 }
