@@ -278,3 +278,12 @@ func Persist(db *DB, args [][]byte) (redis.Reply, *extra) {
 	db.TTLMap.Remove(key)
 	return reply.MakeIntReply(1), &extra{toPersist: true}
 }
+
+func BGRewriteAOF(db *DB, args [][]byte) (redis.Reply, *extra) {
+	if len(args) != 0 {
+		return reply.MakeErrReply("ERR wrong number of arguments for 'bgrewriteaof' command"), nil
+	}
+
+	go db.aofRewrite()
+	return reply.MakeStatusReply("Background append only file rewriting started"), nil
+}

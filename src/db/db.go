@@ -62,6 +62,9 @@ type DB struct {
 	aofChan     chan *reply.MultiBulkReply
 	aofFile     *os.File
 	aofFilename string
+
+	aofRewriteChan chan *reply.MultiBulkReply
+	pausingAof     sync.RWMutex
 }
 
 var router = MakeRouter()
@@ -121,6 +124,9 @@ func (db *DB) Exec(c redis.Client, args [][]byte) (result redis.Reply) {
 		return Subscribe(db, c, args[1:])
 	} else if cmd == "unsubscribe" {
 		return UnSubscribe(db, c, args[1:])
+	} else if cmd == "bgrewriteaof" {
+		reply, _ := BGRewriteAOF(db, args[1:])
+		return reply
 	}
 
 	// normal commands
