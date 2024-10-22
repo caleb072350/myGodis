@@ -189,6 +189,16 @@ func (db *DB) aofRewrite() {
 		}
 		return true
 	})
+
+	// add ttl
+	tmpDB.TTLMap.ForEach(func(key string, raw interface{}) bool {
+		expireTime, _ := raw.(time.Time)
+		cmd := makeExpireCmd(key, expireTime)
+		if cmd != nil {
+			_, _ = file.Write(cmd.ToBytes())
+		}
+		return true
+	})
 	db.finishRewrite(file)
 }
 

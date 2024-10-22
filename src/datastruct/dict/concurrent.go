@@ -3,6 +3,7 @@
 package dict
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -17,11 +18,26 @@ type Shard struct {
 	mutex sync.RWMutex
 }
 
+func computeCapacity(param int) (size int) {
+	if param <= 16 {
+		return 16
+	}
+	n := param - 1
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	if n < 0 {
+		return math.MaxInt32
+	} else {
+		return int(n + 1)
+	}
+}
+
 // 这个我理解就是go语言中的构造函数了，貌似经常看到
 func MakeConcurrent(shardCount int) *ConcurrentDict {
-	if shardCount < 1 {
-		shardCount = 16
-	}
+	shardCount = computeCapacity(shardCount)
 	table := make([]*Shard, shardCount)
 	for i := 0; i < shardCount; i++ {
 		table[i] = &Shard{m: make(map[string]interface{})}

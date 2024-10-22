@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"myGodis/src/config"
 	"myGodis/src/lib/logger"
 	"myGodis/src/redis/handler"
 	"myGodis/src/server"
@@ -8,6 +10,7 @@ import (
 )
 
 func main() {
+	config.SetupConfig("redis.conf")
 	settings := &logger.Settings{
 		Path:       "logs",
 		Name:       "Godis",
@@ -17,8 +20,8 @@ func main() {
 	logger.Setup(settings)
 
 	cfg := &server.Config{
-		Address:    ":16379",
-		MaxConnect: 16,
+		Address:    fmt.Sprintf("%s:%d", config.Properties.Bind, config.Properties.Port),
+		MaxConnect: uint32(config.Properties.MaxClients),
 		Timeout:    2 * time.Second,
 	}
 
