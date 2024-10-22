@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"myGodis/src/config"
 	"myGodis/src/lib/logger"
-	"myGodis/src/redis/handler"
-	"myGodis/src/server"
+	RedisServer "myGodis/src/redis/server"
+	"myGodis/src/tcp"
 	"time"
 )
 
@@ -19,13 +19,11 @@ func main() {
 	}
 	logger.Setup(settings)
 
-	cfg := &server.Config{
+	cfg := &tcp.Config{
 		Address:    fmt.Sprintf("%s:%d", config.Properties.Bind, config.Properties.Port),
 		MaxConnect: uint32(config.Properties.MaxClients),
 		Timeout:    2 * time.Second,
 	}
 
-	// handler := server.MakeEchoHandler()
-
-	server.ListenAndServe(cfg, handler.MakeHandler())
+	tcp.ListenAndServe(cfg, RedisServer.MakeHandler())
 }

@@ -10,20 +10,24 @@ import (
 )
 
 type PropertyHolder struct {
-	Bind           string `cfg:"bind"`
-	Port           int    `cfg:"port"`
-	AppendOnly     bool   `cfg:"appendonly"`
-	AppendFilename string `cfg:"appendfilename"`
-	MaxClients     int    `cfg:"maxclients"`
+	Bind           string   `cfg:"bind"`
+	Port           int      `cfg:"port"`
+	AppendOnly     bool     `cfg:"appendonly"`
+	AppendFilename string   `cfg:"appendfilename"`
+	MaxClients     int      `cfg:"maxclients"`
+	Peers          []string `cfg:"peers"`
+	Self           string   `cfg:"self"`
 }
 
 var Properties *PropertyHolder
 
 func LoadConfig(configFilename string) *PropertyHolder {
+	config := Properties
 	// open config file
 	file, err := os.Open(configFilename)
 	if err != nil {
 		logger.Fatal(err)
+		return config
 	}
 	defer file.Close()
 
@@ -35,11 +39,12 @@ func LoadConfig(configFilename string) *PropertyHolder {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.Split(line, "=")
-		if len(parts) != 2 {
-			logger.Fatal("invalid config: " + line)
+		pivot := strings.IndexAny(line, " ")
+		if pivot > 0 && pivot < len(line)-1 { // separator found
+			key := line[0:pivot]
+			value := strings.Trim(line[pivot+1:], " ")
+			rawMap[strings.ToLower(key)] = value
 		}
-		rawMap[strings.ToLower(parts[0])] = parts[1]
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -47,7 +52,6 @@ func LoadConfig(configFilename string) *PropertyHolder {
 	}
 
 	// parse format
-	config := &PropertyHolder{}
 	t := reflect.TypeOf(config)
 	v := reflect.ValueOf(config)
 	n := t.Elem().NumField()
@@ -73,6 +77,11 @@ func LoadConfig(configFilename string) *PropertyHolder {
 				boolValue, err := strconv.ParseBool(value)
 				if err == nil {
 					fieldVal.SetBool(boolValue)
+				}
+			case reflect.Slice:
+				if field.Type.Elem().Kind() == reflect.String {
+					slice := strings.Split(value, ",")
+					fieldVal.Set(reflect.ValueOf(slice))
 				}
 			}
 		}
