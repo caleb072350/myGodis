@@ -25,7 +25,7 @@ func (db *DB) GetOrInitSet(key string) (set *HashSet.Set, inited bool, errReply 
 	}
 	inited = false
 	if set == nil {
-		set = HashSet.Make(0)
+		set = HashSet.Make()
 		db.Put(key, &DataEntity{
 			Data: set,
 		})

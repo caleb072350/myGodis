@@ -3,18 +3,18 @@ package set
 import "myGodis/src/datastruct/dict"
 
 type Set struct {
-	dict *dict.Dict
+	dict dict.Dict
 }
 
-func Make(shardCountHint int) *Set {
+func Make() *Set {
 	return &Set{
-		dict: dict.Make(shardCountHint),
+		dict: dict.MakeSimple(),
 	}
 }
 
 func MakeFromVals(members ...string) *Set {
 	set := &Set{
-		dict: dict.Make(len(members)),
+		dict: dict.MakeConcurrent(len(members)),
 	}
 	for _, member := range members {
 		set.Add(member)
@@ -71,7 +71,7 @@ func (set *Set) Intersect(another *Set) *Set {
 	if setSize > anotherSize {
 		set, another = another, set
 	}
-	newSet := Make(setSize)
+	newSet := Make()
 	set.ForEach(func(member string) bool {
 		if another.Has(member) {
 			newSet.Add(member)
@@ -86,7 +86,7 @@ func (set *Set) Union(another *Set) *Set {
 	if set == nil {
 		panic("set is nil")
 	}
-	newSet := Make(set.Len() + another.Len())
+	newSet := Make()
 	set.ForEach(func(member string) bool {
 		newSet.Add(member)
 		return true
@@ -103,7 +103,7 @@ func (set *Set) Diff(another *Set) *Set {
 	if set == nil {
 		panic("set is nil")
 	}
-	newSet := Make(set.Len())
+	newSet := Make()
 	set.ForEach(func(member string) bool {
 		if !another.Has(member) {
 			newSet.Add(member)

@@ -6,7 +6,7 @@ import (
 )
 
 func TestPut(t *testing.T) {
-	d := Make(0)
+	d := MakeConcurrent(0)
 	d.Put("key", "value")
 	val, ok := d.Get("key")
 	if !ok || val != "value" {
@@ -21,7 +21,7 @@ func TestPut(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	d := Make(0)
+	d := MakeConcurrent(0)
 	d.Put("key", "value")
 	d.Remove("key")
 	val, ok := d.Get("key")
