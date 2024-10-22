@@ -3,6 +3,7 @@ package db
 import (
 	"bufio"
 	"io"
+	"myGodis/src/config"
 	"myGodis/src/datastruct/dict"
 	List "myGodis/src/datastruct/list"
 	"myGodis/src/datastruct/lock"
@@ -25,9 +26,19 @@ func makeExpireCmd(key string, expireAt time.Time) *reply.MultiBulkReply {
 	return reply.MakeMultiBulkReply(args)
 }
 
+func makeAofCmd(cmd string, args [][]byte) *reply.MultiBulkReply {
+	params := make([][]byte, len(args)+1)
+	params[0] = []byte(cmd)
+	copy(params[1:], args)
+
+	return reply.MakeMultiBulkReply(params)
+}
+
 // send command to aof
 func (db *DB) addAof(args *reply.MultiBulkReply) {
-	db.aofChan <- args
+	if config.Properties.AppendOnly && db.aofFile != nil {
+		db.aofChan <- args
+	}
 }
 
 // listen aof file and write into file
@@ -50,6 +61,13 @@ func trim(msg []byte) string {
 }
 
 func (db *DB) loadAof() {
+	// delete aofChan to prevent write again
+	aofChan := db.aofChan
+	db.aofChan = nil
+	defer func(aofChan chan *reply.MultiBulkReply) {
+		db.aofChan = aofChan
+	}(aofChan)
+
 	file, err := os.Open(db.aofFilename)
 	if err != nil {
 		if _, ok := err.(*os.PathError); ok {

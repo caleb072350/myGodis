@@ -22,19 +22,19 @@ func (db *DB) getAsString(key string) ([]byte, reply.ErrorReply) {
 	return bytes, nil
 }
 
-func Get(db *DB, args [][]byte) (redis.Reply, *extra) {
+func Get(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 1 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'get' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'get' command")
 	}
 	key := string(args[0])
 	bytes, err := db.getAsString(key)
 	if err != nil {
-		return err, nil
+		return err
 	}
 	if bytes == nil {
-		return &reply.NullBulkReply{}, nil
+		return &reply.NullBulkReply{}
 	}
-	return reply.MakeBulkReply(bytes), nil
+	return reply.MakeBulkReply(bytes)
 }
 
 const (
@@ -46,9 +46,9 @@ const (
 const unlimitedTTL int64 = 0
 
 // SET key value [EX seconds] [PX milliseconds] [NX|XX]
-func Set(db *DB, args [][]byte) (redis.Reply, *extra) {
+func Set(db *DB, args [][]byte) redis.Reply {
 	if len(args) < 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'set' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'set' command")
 	}
 	key := string(args[0])
 	value := args[1]
@@ -61,48 +61,48 @@ func Set(db *DB, args [][]byte) (redis.Reply, *extra) {
 			arg := strings.ToUpper(string(args[i]))
 			if arg == "NX" { // insert
 				if policy == updatePolicy {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				policy = insertPolicy
 			} else if arg == "XX" { // update
 				if policy == insertPolicy {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				policy = updatePolicy
 			} else if arg == "EX" { // ttl in seconds
 				if ttl != unlimitedTTL {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				if i+1 > len(args) {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				ttlArg, err := strconv.ParseInt(string(args[i+1]), 10, 64)
 				if err != nil {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				if ttlArg < 0 {
-					return reply.MakeErrReply("ERR invalid expire time in set"), nil
+					return reply.MakeErrReply("ERR invalid expire time in set")
 				}
 				ttl = ttlArg * 1000
 				i++ // skip next arg
 			} else if arg == "PX" { // ttl in milliseconds
 				if ttl != unlimitedTTL {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				if i+1 > len(args) {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				ttlArg, err := strconv.ParseInt(string(args[i+1]), 10, 64)
 				if err != nil {
-					return &reply.SyntaxErrReply{}, nil
+					return &reply.SyntaxErrReply{}
 				}
 				if ttlArg < 0 {
-					return reply.MakeErrReply("ERR invalid expire time in set"), nil
+					return reply.MakeErrReply("ERR invalid expire time in set")
 				}
 				ttl = ttlArg
 				i++ // skip next arg
 			} else {
-				return &reply.SyntaxErrReply{}, nil
+				return &reply.SyntaxErrReply{}
 			}
 		}
 	}
@@ -121,34 +121,34 @@ func Set(db *DB, args [][]byte) (redis.Reply, *extra) {
 	case updatePolicy:
 		result = db.PutIfExists(key, entity)
 	}
-	extra := &extra{toPersist: result > 0}
 	if result > 0 {
 		if ttl != unlimitedTTL {
 			expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
 			db.Expire(key, expireTime)
-			extra.specialAof = []*reply.MultiBulkReply{ // for aof
-				reply.MakeMultiBulkReply([][]byte{
+			db.addAof(reply.MakeMultiBulkReply(
+				[][]byte{
 					[]byte("SET"),
 					args[0],
 					args[1],
-				}),
-				makeExpireCmd(key, expireTime),
-			}
+				},
+			))
+			db.addAof(makeExpireCmd(key, expireTime))
 		} else {
 			db.Persist(key) // override ttl
+			db.addAof(makeAofCmd("set", args))
 		}
 	}
 	if policy == upsertPolicy || result > 0 {
-		return &reply.OkReply{}, extra
+		return &reply.OkReply{}
 	} else {
-		return &reply.NullBulkReply{}, extra
+		return &reply.NullBulkReply{}
 	}
 }
 
 // 不存在则插入
-func SetNX(db *DB, args [][]byte) (redis.Reply, *extra) {
+func SetNX(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'setnx' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'setnx' command")
 	}
 	key := string(args[0])
 	value := args[1]
@@ -156,65 +156,80 @@ func SetNX(db *DB, args [][]byte) (redis.Reply, *extra) {
 		Data: value,
 	}
 	result := db.PutIfAbsent(key, entity)
-	return reply.MakeIntReply(int64(result)), &extra{toPersist: result > 0}
+	if result > 0 {
+		db.addAof(makeAofCmd("setnx", args))
+	}
+	return reply.MakeIntReply(int64(result))
 }
 
 // 存在则更新，并更新TTL
-func SetEX(db *DB, args [][]byte) (redis.Reply, *extra) {
+func SetEX(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 3 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'setex' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'setex' command")
 	}
 	key := string(args[0])
 	value := args[1]
 
 	ttlArg, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
-		return &reply.SyntaxErrReply{}, nil
+		return &reply.SyntaxErrReply{}
 	}
 	if ttlArg <= 0 {
-		return reply.MakeErrReply("ERR invalid expire time in setex"), nil
+		return reply.MakeErrReply("ERR invalid expire time in setex")
 	}
 	ttl := ttlArg * 1000
 	entity := &DataEntity{
 		Data: value,
 	}
-	result := db.PutIfExists(key, entity)
-	if result > 0 && ttl != unlimitedTTL {
-		expireTime := time.Now().Add(time.Duration(ttlArg) * time.Millisecond)
-		db.Expire(key, expireTime)
+
+	db.Lock(key)
+	defer db.UnLock(key)
+
+	result := db.Put(key, entity)
+
+	expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
+	db.Expire(key, expireTime)
+
+	if result > 0 {
+		db.addAof(makeAofCmd("setex", args))
+		db.addAof(makeExpireCmd(key, expireTime))
 	}
-	return &reply.OkReply{}, &extra{toPersist: result > 0}
+	return &reply.OkReply{}
 }
 
 // 存在则更新，不过ttl的单位为ms
-func PSetEX(db *DB, args [][]byte) (redis.Reply, *extra) {
+func PSetEX(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 3 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'psetex' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'psetex' command")
 	}
 	key := string(args[0])
 	value := args[1]
 
 	ttl, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
-		return &reply.SyntaxErrReply{}, nil
+		return &reply.SyntaxErrReply{}
 	}
 	if ttl <= 0 {
-		return reply.MakeErrReply("ERR invalid expire time in psetex"), nil
+		return reply.MakeErrReply("ERR invalid expire time in psetex")
 	}
 	entity := &DataEntity{
 		Data: value,
 	}
 	result := db.PutIfExists(key, entity)
-	if result > 0 && ttl != unlimitedTTL {
-		expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
-		db.Expire(key, expireTime)
+	if result > 0 {
+		db.addAof(makeAofCmd("psetex", args))
+		if ttl != unlimitedTTL {
+			expireTime := time.Now().Add(time.Duration(ttl) * time.Millisecond)
+			db.Expire(key, expireTime)
+			db.addAof(makeExpireCmd(key, expireTime))
+		}
 	}
-	return &reply.OkReply{}, &extra{toPersist: result > 0}
+	return &reply.OkReply{}
 }
 
-func MSet(db *DB, args [][]byte) (redis.Reply, *extra) {
+func MSet(db *DB, args [][]byte) redis.Reply {
 	if len(args)%2 != 0 || len(args) == 0 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'mset' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'mset' command")
 	}
 	size := len(args) / 2
 	keys := make([]string, size)
@@ -231,12 +246,13 @@ func MSet(db *DB, args [][]byte) (redis.Reply, *extra) {
 		value := values[i]
 		db.Put(key, &DataEntity{Data: value})
 	}
-	return &reply.OkReply{}, &extra{toPersist: true}
+	db.addAof(makeAofCmd("mset", args))
+	return &reply.OkReply{}
 }
 
-func MGet(db *DB, args [][]byte) (redis.Reply, *extra) {
+func MGet(db *DB, args [][]byte) redis.Reply {
 	if len(args) == 0 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'mget' command "), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'mget' command ")
 	}
 	keys := make([]string, len(args))
 	for i, v := range args {
@@ -251,33 +267,34 @@ func MGet(db *DB, args [][]byte) (redis.Reply, *extra) {
 				result[i] = nil
 				continue
 			} else {
-				return err, nil
+				return err
 			}
 		}
 		result[i] = bytes // nil or []byte
 	}
-	return reply.MakeMultiBulkReply(result), nil
+	return reply.MakeMultiBulkReply(result)
 }
 
-func GetSet(db *DB, args [][]byte) (redis.Reply, *extra) {
+func GetSet(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'getset' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'getset' command")
 	}
 	key := string(args[0])
 	value := args[1]
 
 	old, err := db.getAsString(key)
 	if err != nil {
-		return err, nil
+		return err
 	}
 	db.Put(key, &DataEntity{Data: value})
 	db.Persist(key)
-	return reply.MakeBulkReply(old), &extra{toPersist: true}
+	db.addAof(makeAofCmd("getset", args))
+	return reply.MakeBulkReply(old)
 }
 
-func Incr(db *DB, args [][]byte) (redis.Reply, *extra) {
+func Incr(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 1 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'incr' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'incr' command")
 	}
 	key := string(args[0])
 
@@ -286,30 +303,32 @@ func Incr(db *DB, args [][]byte) (redis.Reply, *extra) {
 
 	bytes, err := db.getAsString(key)
 	if err != nil {
-		return err, nil
+		return err
 	}
 	if bytes != nil {
 		val, err := strconv.ParseInt(string(bytes), 10, 64)
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
 		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+1, 10))})
-		return reply.MakeIntReply(val + 1), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incr", args))
+		return reply.MakeIntReply(val + 1)
 	} else {
 		db.Put(key, &DataEntity{Data: []byte("1")})
-		return reply.MakeIntReply(1), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incr", args))
+		return reply.MakeIntReply(1)
 	}
 }
 
-func IncrBy(db *DB, args [][]byte) (redis.Reply, *extra) {
+func IncrBy(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'incrby' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'incrby' command")
 	}
 	key := string(args[0])
 	rawDelta := string(args[1])
 	delta, err := strconv.ParseInt(rawDelta, 10, 64)
 	if err != nil {
-		return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+		return reply.MakeErrReply("ERR value is not an integer or out of range")
 	}
 
 	db.Lock(key)
@@ -317,30 +336,32 @@ func IncrBy(db *DB, args [][]byte) (redis.Reply, *extra) {
 
 	bytes, errReply := db.getAsString(key)
 	if errReply != nil {
-		return errReply, nil
+		return errReply
 	}
 	if bytes != nil {
 		val, err := strconv.ParseInt(string(bytes), 10, 64)
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
 		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val+delta, 10))})
-		return reply.MakeIntReply(val + delta), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incrby", args))
+		return reply.MakeIntReply(val + delta)
 	} else {
 		db.Put(key, &DataEntity{Data: args[1]})
-		return reply.MakeIntReply(delta), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incrby", args))
+		return reply.MakeIntReply(delta)
 	}
 }
 
-func IncrByFloat(db *DB, args [][]byte) (redis.Reply, *extra) {
+func IncrByFloat(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'incrbyfloat' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'incrbyfloat' command")
 	}
 	key := string(args[0])
 	rawDelta := string(args[1])
 	delta, err := decimal.NewFromString(rawDelta)
 	if err != nil {
-		return reply.MakeErrReply("ERR value is not a valid float"), nil
+		return reply.MakeErrReply("ERR value is not a valid float")
 	}
 
 	db.Lock(key)
@@ -348,25 +369,27 @@ func IncrByFloat(db *DB, args [][]byte) (redis.Reply, *extra) {
 
 	bytes, errReply := db.getAsString(key)
 	if errReply != nil {
-		return errReply, nil
+		return errReply
 	}
 	if bytes != nil {
 		val, err := decimal.NewFromString(string(bytes))
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not a valid float"), nil
+			return reply.MakeErrReply("ERR value is not a valid float")
 		}
 		resultBytes := []byte(val.Add(delta).String())
 		db.Put(key, &DataEntity{Data: resultBytes})
-		return reply.MakeBulkReply(resultBytes), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incrbyfloat", args))
+		return reply.MakeBulkReply(resultBytes)
 	} else {
 		db.Put(key, &DataEntity{Data: args[1]})
-		return reply.MakeBulkReply(args[1]), &extra{toPersist: true}
+		db.addAof(makeAofCmd("incrbyfloat", args))
+		return reply.MakeBulkReply(args[1])
 	}
 }
 
-func Decr(db *DB, args [][]byte) (redis.Reply, *extra) {
+func Decr(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 1 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'decr' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'decr' command")
 	}
 	key := string(args[0])
 
@@ -375,30 +398,32 @@ func Decr(db *DB, args [][]byte) (redis.Reply, *extra) {
 
 	bytes, errReply := db.getAsString(key)
 	if errReply != nil {
-		return errReply, nil
+		return errReply
 	}
 	if bytes != nil {
 		val, err := strconv.ParseInt(string(bytes), 10, 64)
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
 		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-1, 10))})
-		return reply.MakeIntReply(val - 1), &extra{toPersist: true}
+		db.addAof(makeAofCmd("decr", args))
+		return reply.MakeIntReply(val - 1)
 	} else {
 		db.Put(key, &DataEntity{Data: []byte("-1")})
-		return reply.MakeIntReply(-1), &extra{toPersist: true}
+		db.addAof(makeAofCmd("decr", args))
+		return reply.MakeIntReply(-1)
 	}
 }
 
-func DecrBy(db *DB, args [][]byte) (redis.Reply, *extra) {
+func DecrBy(db *DB, args [][]byte) redis.Reply {
 	if len(args) != 2 {
-		return reply.MakeErrReply("ERR wrong number of arguments for 'decrby' command"), nil
+		return reply.MakeErrReply("ERR wrong number of arguments for 'decrby' command")
 	}
 	key := string(args[0])
 	rawDelta := string(args[1])
 	delta, err := strconv.ParseInt(rawDelta, 10, 64)
 	if err != nil {
-		return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+		return reply.MakeErrReply("ERR value is not an integer or out of range")
 	}
 
 	db.Lock(key)
@@ -406,17 +431,19 @@ func DecrBy(db *DB, args [][]byte) (redis.Reply, *extra) {
 
 	bytes, errReply := db.getAsString(key)
 	if errReply != nil {
-		return errReply, nil
+		return errReply
 	}
 	if bytes != nil {
 		val, err := strconv.ParseInt(string(bytes), 10, 64)
 		if err != nil {
-			return reply.MakeErrReply("ERR value is not an integer or out of range"), nil
+			return reply.MakeErrReply("ERR value is not an integer or out of range")
 		}
 		db.Put(key, &DataEntity{Data: []byte(strconv.FormatInt(val-delta, 10))})
-		return reply.MakeIntReply(val - delta), &extra{toPersist: true}
+		db.addAof(makeAofCmd("decrby", args))
+		return reply.MakeIntReply(val - delta)
 	} else {
 		db.Put(key, &DataEntity{Data: args[1]})
-		return reply.MakeIntReply(-delta), &extra{toPersist: true}
+		db.addAof(makeAofCmd("decrby", args))
+		return reply.MakeIntReply(-delta)
 	}
 }
